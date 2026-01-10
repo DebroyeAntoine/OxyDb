@@ -1,3 +1,5 @@
+use crate::data_type::DataType;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Null,
@@ -37,6 +39,16 @@ impl Value {
         match self {
             Self::Bool(b) => Some(*b),
             _ => None,
+        }
+    }
+
+    pub fn data_type(&self) -> Option<DataType> {
+        match self {
+            Self::Null => None,
+            Self::Int(_) => Some(DataType::Int),
+            Self::Float(_) => Some(DataType::Float),
+            Self::Text(_) => Some(DataType::Text),
+            Self::Bool(_) => Some(DataType::Bool),
         }
     }
 }

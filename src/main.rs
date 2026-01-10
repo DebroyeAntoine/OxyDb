@@ -1,19 +1,18 @@
+mod column;
+mod data_type;
 mod value;
+
+use column::Column;
+use data_type::DataType;
 use value::Value;
 
 fn main() {
-    let v1 = Value::Int(42);
-    let v2 = Value::Int(42);
-    let v3 = Value::Text("hello".to_string());
+    let mut col = Column::new("age".to_string(), DataType::Int);
 
-    // Clone
-    let v1_copy = v1.clone();
+    col.push(Value::Int(30)).unwrap();
+    col.push(Value::Null).unwrap();
+    col.push(Value::Int(25)).unwrap();
 
-    // PartialEq
-    println!("v1 == v2 ? {}", v1 == v2); // true
-    println!("v1 == v3 ? {}", v1 == v3); // false
-    println!("v1 == v1 copy ? {}", v1 == v1_copy); // false
-
-    // Debug
-    println!("{:?}", v1);
+    println!("Column length: {}", col.len());
+    println!("{:?}", col);
 }
