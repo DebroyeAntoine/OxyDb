@@ -74,4 +74,19 @@ impl Column {
     pub fn len(&self) -> usize {
         self.null_bitmap.len()
     }
+
+    pub fn get(&self, row_idx: usize) -> Option<Value> {
+        if row_idx >= self.len() {
+            return None;
+        }
+        if self.null_bitmap[row_idx] {
+            return Some(Value::Null);
+        }
+        match &self.data {
+            ColumnData::Int(col) => Some(Value::Int(col[row_idx])),
+            ColumnData::Text(col) => Some(Value::Text(col[row_idx].clone())),
+            ColumnData::Float(col) => Some(Value::Float(col[row_idx])),
+            ColumnData::Bool(col) => Some(Value::Bool(col[row_idx])),
+        }
+    }
 }

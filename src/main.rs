@@ -13,6 +13,10 @@ fn main() {
     col.push(Value::Null).unwrap();
     col.push(Value::Int(25)).unwrap();
 
-    println!("Column length: {}", col.len());
-    println!("{:?}", col);
+    assert_eq!(col.get(0), Some(Value::Int(30)));
+    assert_eq!(col.get(1), Some(Value::Null));
+    assert_eq!(col.get(2), Some(Value::Int(25)));
+    assert_eq!(col.get(999), None); // Out of bounds
+
+    println!("✅ All tests passed!");
 }
