@@ -1,5 +1,6 @@
 mod column;
 mod data_type;
+mod table;
 mod value;
 
 use column::Column;
