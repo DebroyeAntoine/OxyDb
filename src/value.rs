@@ -1,11 +1,13 @@
+use std::sync::Arc;
+
 use crate::data_type::DataType;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Null,
-    Int(i64), // ← contient un nombre
+    Int(i64),
     Float(f64),
-    Text(String), // ← contient le texte
+    Text(Arc<str>),
     Bool(bool),
 }
 
@@ -175,7 +177,7 @@ mod tests {
                 Value::Null => assert!(v.is_null()),
                 Value::Int(i) => assert_eq!(v.as_int(), Some(i)),
                 Value::Float(f) => assert_eq!(v.as_float(), Some(f)),
-                Value::Text(ref s) => assert_eq!(v.as_str(), Some(s.as_str())),
+                Value::Text(s) => assert_eq!(v.as_str(), Some(s.as_ref())),
                 Value::Bool(b) => assert_eq!(v.as_bool(), Some(b)),
             }
         }

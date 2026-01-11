@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::data_type::DataType;
 use crate::value::Value;
 use bitvec::prelude::*;
@@ -6,7 +8,7 @@ use bitvec::prelude::*;
 pub enum ColumnData {
     Int(Vec<i64>),
     Float(Vec<f64>),
-    Text(Vec<String>),
+    Text(Vec<Arc<str>>),
     Bool(BitVec), // ← Déjà compact !
 }
 
@@ -41,7 +43,7 @@ impl Column {
             match &mut self.data {
                 ColumnData::Int(v) => v.push(0),
                 ColumnData::Float(v) => v.push(0.0),
-                ColumnData::Text(v) => v.push(String::new()),
+                ColumnData::Text(v) => v.push(String::new().into()),
                 ColumnData::Bool(v) => v.push(false),
             }
 
