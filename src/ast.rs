@@ -16,7 +16,12 @@ pub struct InsertInto {
     values: Vec<Value>,
 }
 
+pub enum ColumnsSelect {
+    Star,
+    ColumnsNames(Vec<String>),
+}
+
 pub struct Select {
-    columns: Vec<String>,
+    columns: ColumnsSelect,
     table: Vec<String>,
 }
