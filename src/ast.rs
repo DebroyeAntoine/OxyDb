@@ -7,13 +7,14 @@ pub enum Statement {
 }
 
 pub struct CreateTable {
-    name: String,
-    columns: Vec<ColumnDef>,
+    pub name: String,
+    pub columns: Vec<ColumnDef>,
 }
 
 pub struct InsertInto {
-    table: String,
-    values: Vec<Value>,
+    pub table: String,
+    pub columns: Option<Vec<String>>,
+    pub values: Vec<Value>,
 }
 
 pub enum ColumnsSelect {
@@ -22,6 +23,6 @@ pub enum ColumnsSelect {
 }
 
 pub struct Select {
-    columns: ColumnsSelect,
-    table: Vec<String>,
+    pub columns: ColumnsSelect,
+    pub table: String,
 }
