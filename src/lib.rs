@@ -2,6 +2,7 @@ pub mod column;
 pub mod data_type;
 pub mod database;
 pub mod table;
+pub mod tokenizer;
 pub mod value;
 
 pub use column::Column;
