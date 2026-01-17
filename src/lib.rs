@@ -1,3 +1,4 @@
+pub mod ast;
 pub mod column;
 pub mod data_type;
 pub mod database;
