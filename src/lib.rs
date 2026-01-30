@@ -2,6 +2,7 @@ pub mod ast;
 pub mod column;
 pub mod data_type;
 pub mod database;
+pub mod parser;
 pub mod table;
 pub mod tokenizer;
 pub mod value;
