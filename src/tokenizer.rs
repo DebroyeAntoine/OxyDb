@@ -20,6 +20,7 @@ pub enum Token {
     Ident(String),  // nom de table/colonne
     Number(i64),    // 42
     String(String), // 'Alice'
+    FloatNumber(f64),
 
     // Symbols
     LeftParen,  // (
@@ -133,10 +134,25 @@ impl Tokenizer {
 
     fn read_number(&mut self) -> Result<Token, String> {
         let mut number = String::new();
+        let mut has_dot = false;
 
-        while !self.is_at_end() && self.current_char().is_numeric() {
+        while !self.is_at_end()
+            && (self.current_char().is_numeric() || (self.current_char() == '.' && !has_dot))
+        {
+            if self.current_char() == '.' {
+                has_dot = true;
+            }
             number.push(self.current_char());
             self.advance();
+        }
+        if !self.is_at_end() && self.current_char() == '.' {
+            return Err("mutliple . is not allowed for a float".into());
+        }
+        if has_dot {
+            return number
+                .parse::<f64>()
+                .map(Token::FloatNumber)
+                .map_err(|e| e.to_string());
         }
 
         number
@@ -240,6 +256,22 @@ mod tests {
                 Token::Number(123),
                 Token::Comma,
                 Token::Number(0),
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_tokenize_floats() {
+        let mut tokenizer = Tokenizer::new("1.14, 45.0");
+        let tokens = tokenizer.tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::FloatNumber(1.14),
+                Token::Comma,
+                Token::FloatNumber(45.0),
                 Token::Eof,
             ]
         );
