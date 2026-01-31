@@ -20,7 +20,7 @@ impl Parser {
         let statement = match self.current_token() {
             Token::Create => self.parse_create_table(),
             Token::Insert => self.parse_insert(),
-            //Token::Select => self.parse_select(),
+            Token::Select => self.parse_select(),
             _ => Err(format!("Unexpected token: {:?}", self.current_token())),
         }?;
 
@@ -221,6 +221,48 @@ impl Parser {
             values,
         }))
     }
+
+    fn parse_columns(&mut self) -> Result<ColumnsSelect, String> {
+        match self.current_token() {
+            Token::Star => {
+                self.advance();
+                Ok(ColumnsSelect::Star)
+            }
+
+            Token::Ident(_) => {
+                let mut cols = Vec::new();
+
+                loop {
+                    match self.current_token() {
+                        Token::Ident(name) => {
+                            cols.push(name.clone());
+                            self.advance();
+                        }
+                        _ => return Err("Expected column name".into()),
+                    }
+
+                    if *self.current_token() == Token::Comma {
+                        self.advance();
+                        continue;
+                    }
+
+                    break;
+                }
+
+                Ok(ColumnsSelect::ColumnsNames(cols))
+            }
+
+            _ => Err("Expected '*' or column name".into()),
+        }
+    }
+
+    fn parse_select(&mut self) -> Result<Statement, String> {
+        self.consume(Token::Select)?;
+        let columns = self.parse_columns()?;
+        self.consume(Token::From)?;
+        let table = self.consume_ident()?;
+        Ok(Statement::Select(Select { columns, table }))
+    }
 }
 
 #[cfg(test)]
@@ -289,6 +331,43 @@ mod tests {
                 assert_eq!(ins.values[1], Value::Text(Arc::from("Alice")));
             }
             _ => panic!("Expected InsertInto"),
+        }
+    }
+
+    #[test]
+    fn test_select_star() {
+        let sql = "SELECT * FROM users";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        match statement {
+            Statement::Select(sel) => {
+                assert_eq!(sel.columns, ColumnsSelect::Star);
+                assert_eq!(sel.table, "users".to_string());
+            }
+            _ => panic!("Expected Select"),
+        }
+    }
+
+    #[test]
+    fn test_select_columns() {
+        let sql = "SELECT name, age FROM users";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        match statement {
+            Statement::Select(sel) => {
+                let columns = vec!["name".into(), "age".into()];
+                assert_eq!(sel.columns, ColumnsSelect::ColumnsNames(columns));
+                assert_eq!(sel.table, "users".to_string());
+            }
+            _ => panic!("Expected Select"),
         }
     }
 }

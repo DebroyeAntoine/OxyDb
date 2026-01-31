@@ -19,7 +19,7 @@ pub struct InsertInto {
     pub values: Vec<Value>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ColumnsSelect {
     Star,
     ColumnsNames(Vec<String>),
