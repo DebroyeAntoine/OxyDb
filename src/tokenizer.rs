@@ -47,7 +47,7 @@ pub enum Token {
     /// Greater than
     Greater,
     /// Lower than
-    Lowser,
+    Lower,
     /// Equal to
     Equal,
 
@@ -131,7 +131,7 @@ impl Tokenizer {
             }
             '<' => {
                 self.advance();
-                Ok(Token::Lowser)
+                Ok(Token::Lower)
             }
             '=' => {
                 self.advance();

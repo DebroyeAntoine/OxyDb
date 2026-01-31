@@ -277,7 +277,100 @@ impl Parser {
         let columns = self.parse_columns()?;
         self.consume(Token::From)?;
         let table = self.consume_ident()?;
-        Ok(Statement::Select(Select { columns, table }))
+        let where_clause: Option<Expr> = {
+            if *self.current_token() == Token::Where {
+                self.advance();
+                Some(self.parse_expression()?)
+            } else {
+                None
+            }
+        };
+        Ok(Statement::Select(Select {
+            columns,
+            table,
+            where_clause,
+        }))
+    }
+
+    /// Parses a WHERE clause expression.
+    ///
+    /// Entry point for expression parsing. Delegates to `parse_or_expr()`
+    /// to handle operator precedence correctly.
+    fn parse_expression(&mut self) -> Result<Expr, String> {
+        self.parse_or_expr()
+    }
+
+    /// Parses OR expressions with left-associativity.
+    ///
+    /// Handles chains of OR operations, building a left-associative tree.
+    /// OR has the lowest precedence among boolean operators.
+    ///
+    /// # Examples
+    /// - `age > 18 OR name = 'Alice'`
+    /// - `a = 1 OR b = 2 OR c = 3` → `((a=1) OR (b=2)) OR (c=3)`
+    fn parse_or_expr(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_and_expr()?;
+        while matches!(self.current_token(), Token::Or) {
+            self.advance();
+            let right_expr = self.parse_and_expr()?;
+            expr = Expr::Or {
+                left: Box::new(expr),
+                right: Box::new(right_expr),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses AND expressions with left-associativity.
+    ///
+    /// Handles chains of AND operations, building a left-associative tree.
+    /// AND has higher precedence than OR but lower than comparisons.
+    ///
+    /// # Examples
+    /// - `age > 18 AND active = TRUE`
+    /// - `a = 1 AND b = 2 AND c = 3` → `((a=1) AND (b=2)) AND (c=3)`
+    fn parse_and_expr(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_op_expr()?;
+        while matches!(self.current_token(), Token::And) {
+            self.advance();
+            let right_expr = self.parse_op_expr()?;
+            expr = Expr::And {
+                left: Box::new(expr),
+                right: Box::new(right_expr),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses a comparison expression (the atomic unit of WHERE clauses).
+    ///
+    /// Expects the pattern: `column OPERATOR value`
+    ///
+    /// # Supported Operators
+    /// - `>` (Greater Than)
+    /// - `<` (Less Than)
+    /// - `=` (Equal)
+    ///
+    /// # Examples
+    /// - `age > 18`
+    /// - `name = 'Alice'`
+    /// - `active = TRUE`
+    fn parse_op_expr(&mut self) -> Result<Expr, String> {
+        let column = self.consume_ident()?;
+        let op = match self.current_token() {
+            Token::Lower => ComparisonOp::Lt,
+            Token::Greater => ComparisonOp::Gt,
+            Token::Equal => ComparisonOp::Eq,
+            _ => {
+                return Err(format!(
+                    "Token {:?} is not a valid operator",
+                    self.current_token()
+                ));
+            }
+        };
+        self.advance();
+        let value = self.consume_value()?;
+        Ok(Expr::Comparison { column, op, value })
     }
 }
 
@@ -382,6 +475,49 @@ mod tests {
                 let columns = vec!["name".into(), "age".into()];
                 assert_eq!(sel.columns, ColumnsSelect::ColumnsNames(columns));
                 assert_eq!(sel.table, "users".to_string());
+            }
+            _ => panic!("Expected Select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_with_where() {
+        let sql = "SELECT * FROM users WHERE age > 18";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        match statement {
+            Statement::Select(sel) => {
+                assert_eq!(sel.table, "users");
+                assert!(sel.where_clause.is_some());
+
+                if let Some(Expr::Comparison { column, op, value }) = sel.where_clause {
+                    assert_eq!(column, "age");
+                    assert_eq!(op, ComparisonOp::Gt);
+                    assert_eq!(value, Value::Int(18));
+                } else {
+                    panic!("Expected Comparison");
+                }
+            }
+            _ => panic!("Expected Select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_with_and() {
+        let sql = "SELECT name FROM users WHERE age > 18 AND active = TRUE";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        match statement {
+            Statement::Select(sel) => {
+                assert!(matches!(sel.where_clause, Some(Expr::And { .. })));
             }
             _ => panic!("Expected Select"),
         }
