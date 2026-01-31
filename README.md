@@ -2,7 +2,7 @@
 
 OxyDB is a high-performance, in-memory SQL database engine written in Rust. It utilizes **columnar storage** to optimize memory locality and analytical query performance.
 
-[![Rust](https://github.com/DebroyeAntoine/OxyDb/actions/workflows/rust.yml/badge.svg)](https://github.com/DebroyeAntoine/OxyDb/actions/workflows/rust.yml)
+[![Rust CI](https://github.com/DebroyeAntoine/OxyDb/actions/workflows/rust.yaml/badge.svg)](https://github.com/DebroyeAntoine/OxyDb/actions/workflows/rust.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## ✨ Features
