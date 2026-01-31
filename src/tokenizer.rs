@@ -10,6 +10,8 @@ pub enum Token {
     Select,
     From,
     Where,
+    And,
+    Or,
 
     // --- Data Types ---
     Int,
@@ -42,6 +44,12 @@ pub enum Token {
     Semicolon,
     /// Multiplication or wildcard symbol `*`
     Star,
+    /// Greater than
+    Greater,
+    /// Lower than
+    Lowser,
+    /// Equal to
+    Equal,
 
     // --- Special ---
     /// Represents the End Of File/Input.
@@ -117,6 +125,18 @@ impl Tokenizer {
                 self.advance();
                 Ok(Token::Star)
             }
+            '>' => {
+                self.advance();
+                Ok(Token::Greater)
+            }
+            '<' => {
+                self.advance();
+                Ok(Token::Lowser)
+            }
+            '=' => {
+                self.advance();
+                Ok(Token::Equal)
+            }
             c if c.is_alphabetic() => self.read_identifier(),
             c if c.is_numeric() => self.read_number(),
             '\'' => self.read_string(),
@@ -179,6 +199,8 @@ impl Tokenizer {
             "BOOL" => Ok(Token::Bool),
             "TRUE" => Ok(Token::True),
             "FALSE" => Ok(Token::False),
+            "AND" => Ok(Token::And),
+            "OR" => Ok(Token::Or),
             _ => Ok(Token::Ident(ident)),
         }
     }
