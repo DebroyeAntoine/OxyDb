@@ -82,6 +82,10 @@ impl Tokenizer {
                 self.advance();
                 Ok(Token::Comma)
             }
+            '*' => {
+                self.advance();
+                Ok(Token::Star)
+            }
             c if c.is_alphabetic() => self.read_identifier(),
             c if c.is_numeric() => self.read_number(),
             '\'' => self.read_string(),
