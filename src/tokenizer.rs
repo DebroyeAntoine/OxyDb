@@ -1,6 +1,7 @@
+/// Represents the smallest meaningful units (atoms) of the SQL language.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    // SQL Keywords
+    // --- SQL Keywords ---
     Create,
     Table,
     Insert,
@@ -10,37 +11,53 @@ pub enum Token {
     From,
     Where,
 
-    // Types
+    // --- Data Types ---
     Int,
     Text,
     Float,
     Bool,
 
-    // Identifiers & Literals
-    Ident(String),  // nom de table/colonne
-    Number(i64),    // 42
-    String(String), // 'Alice'
+    // --- Identifiers & Literals ---
+    /// A name representing a table or a column (e.g., `users`, `id`).
+    Ident(String),
+    /// A 64-bit integer literal (e.g., `42`).
+    Number(i64),
+    /// A string literal, defined between single quotes (e.g., `'Alice'`).
+    String(String),
+    /// A 64-bit floating-point literal (e.g., `3.14`).
     FloatNumber(f64),
+    /// The boolean literal `TRUE`.
     True,
+    /// The boolean literal `FALSE`.
     False,
 
-    // Symbols
-    LeftParen,  // (
-    RightParen, // )
-    Comma,      // ,
-    Semicolon,  // ;
-    Star,       // *
+    // --- Symbols ---
+    /// Left parenthesis `(`
+    LeftParen,
+    /// Right parenthesis `)`
+    RightParen,
+    /// Comma `,`
+    Comma,
+    /// Semicolon `;`
+    Semicolon,
+    /// Multiplication or wildcard symbol `*`
+    Star,
 
-    // EOF
+    // --- Special ---
+    /// Represents the End Of File/Input.
     Eof,
 }
 
+/// A lexical scanner (lexer) that converts a raw SQL string into a sequence of [Token]s.
 pub struct Tokenizer {
+    /// The input string stored as a vector of characters for easy iteration.
     input: Vec<char>,
+    /// The current position in the character vector.
     position: usize,
 }
 
 impl Tokenizer {
+    /// Creates a new Tokenizer for the given input string.
     pub fn new(input: &str) -> Self {
         Self {
             input: input.chars().collect(),
@@ -48,6 +65,19 @@ impl Tokenizer {
         }
     }
 
+    /// Processes the entire input and returns a vector of tokens.
+    ///
+    /// # Errors
+    /// Returns an error if an invalid character is encountered or if a literal
+    /// (like a string) is malformed.
+    ///
+    /// # Example
+    /// ```
+    /// # use db::tokenizer::{Tokenizer, Token};
+    /// let mut t = Tokenizer::new("SELECT *");
+    /// let tokens = t.tokenize().unwrap();
+    /// assert_eq!(tokens[0], Token::Select);
+    /// ```
     pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
         let mut tokens = Vec::new();
 
@@ -66,6 +96,7 @@ impl Tokenizer {
         Ok(tokens)
     }
 
+    /// Identifies the next token based on the character at the current position.
     fn next_token(&mut self) -> Result<Token, String> {
         let ch = self.current_char();
 
@@ -93,25 +124,36 @@ impl Tokenizer {
         }
     }
 
-    // Helpers
+    // --- Navigation Helpers ---
+
+    /// Returns the character at the current position.
     fn current_char(&self) -> char {
         self.input[self.position]
     }
 
+    /// Moves the cursor forward by one character.
     fn advance(&mut self) {
         self.position += 1;
     }
 
+    /// Checks if the cursor has reached the end of the input.
     fn is_at_end(&self) -> bool {
         self.position >= self.input.len()
     }
 
+    /// Consumes any whitespace characters (spaces, tabs, newlines).
     fn skip_whitespace(&mut self) {
         while !self.is_at_end() && self.current_char().is_whitespace() {
             self.advance();
         }
     }
 
+    // --- Extraction Logic ---
+
+    /// Reads a sequence of alphanumeric characters and determines if it's
+    /// a reserved SQL keyword or a user-defined identifier.
+    ///
+    /// Keywords are matched case-insensitively.
     fn read_identifier(&mut self) -> Result<Token, String> {
         let mut ident = String::new();
 
@@ -121,6 +163,7 @@ impl Tokenizer {
             ident.push(self.current_char());
             self.advance();
         }
+
         match ident.to_uppercase().as_str() {
             "CREATE" => Ok(Token::Create),
             "TABLE" => Ok(Token::Table),
@@ -140,6 +183,8 @@ impl Tokenizer {
         }
     }
 
+    /// Reads a numeric literal. If a dot `.` is encountered, it returns a
+    /// [Token::FloatNumber], otherwise a [Token::Number].
     fn read_number(&mut self) -> Result<Token, String> {
         let mut number = String::new();
         let mut has_dot = false;
@@ -153,9 +198,11 @@ impl Tokenizer {
             number.push(self.current_char());
             self.advance();
         }
+
         if !self.is_at_end() && self.current_char() == '.' {
-            return Err("mutliple . is not allowed for a float".into());
+            return Err("multiple dots are not allowed for a float".into());
         }
+
         if has_dot {
             return number
                 .parse::<f64>()
@@ -169,21 +216,26 @@ impl Tokenizer {
             .map_err(|e| e.to_string())
     }
 
+    /// Reads a string literal enclosed in single quotes.
     fn read_string(&mut self) -> Result<Token, String> {
-        self.advance();
-        if self.current_char() == '\'' {
-            return Err("The string passed in entry is null".to_string());
-        }
-        let mut string = String::new();
-        while self.current_char() != '\'' && !self.is_at_end() {
-            string.push(self.current_char());
-            self.advance();
-            if self.is_at_end() {
-                return Err("Unterminated string".into());
-            }
+        self.advance(); // Skip the opening quote
+
+        if !self.is_at_end() && self.current_char() == '\'' {
+            self.advance(); // Consume empty string closing quote
+            return Ok(Token::String(String::new()));
         }
 
-        // Skip the last '
+        let mut string = String::new();
+        while !self.is_at_end() && self.current_char() != '\'' {
+            string.push(self.current_char());
+            self.advance();
+        }
+
+        if self.is_at_end() {
+            return Err("Unterminated string".into());
+        }
+
+        // Skip the closing quote
         self.advance();
 
         Ok(Token::String(string))

@@ -2,20 +2,33 @@ use std::sync::Arc;
 
 use crate::data_type::DataType;
 
+/// Represents a single data value stored in the database.
+///
+/// This enum wraps all supported Rust types into a single type that can be
+/// passed around the engine. It includes support for SQL `NULL` values.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// represents an empty or missing value.
     Null,
+    /// A 64-bit signed integer value.
     Int(i64),
+    /// A 64-bit floating-point value.
     Float(f64),
+    /// A UTF-8 string value, wrapped in an [Arc] for efficient,
+    /// thread-safe sharing and cheap cloning.
     Text(Arc<str>),
+    /// A boolean value.
     Bool(bool),
 }
 
 impl Value {
+    /// Returns `true` if the value is [Value::Null].
     pub fn is_null(&self) -> bool {
         matches!(self, Self::Null)
     }
 
+    /// Returns the inner integer value if this is a [Value::Int].
+    /// Otherwise, returns `None`.
     pub fn as_int(&self) -> Option<i64> {
         match self {
             Self::Int(i) => Some(*i),
@@ -23,6 +36,8 @@ impl Value {
         }
     }
 
+    /// Returns the inner float value if this is a [Value::Float].
+    /// Otherwise, returns `None`.
     pub fn as_float(&self) -> Option<f64> {
         match self {
             Self::Float(f) => Some(*f),
@@ -30,6 +45,8 @@ impl Value {
         }
     }
 
+    /// Returns a reference to the inner string slice if this is a [Value::Text].
+    /// Otherwise, returns `None`.
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::Text(s) => Some(s),
@@ -37,6 +54,8 @@ impl Value {
         }
     }
 
+    /// Returns the inner boolean value if this is a [Value::Bool].
+    /// Otherwise, returns `None`.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Self::Bool(b) => Some(*b),
@@ -44,6 +63,10 @@ impl Value {
         }
     }
 
+    /// Returns the logical [DataType] corresponding to this value.
+    ///
+    /// Returns `None` if the value is [Value::Null], because in this database
+    /// engine, a standalone NULL value is untyped until it is placed in a [Column].
     pub fn data_type(&self) -> Option<DataType> {
         match self {
             Self::Null => None,

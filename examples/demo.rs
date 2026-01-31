@@ -1,96 +1,65 @@
-use std::sync::Arc;
+//! # Database Demo
+//!
+//! This example demonstrates the full end-to-end flow of the database:
+//! 1. Initializing the engine.
+//! 2. Executing SQL DDL (Data Definition Language) to create tables.
+//! 3. Executing SQL DML (Data Manipulation Language) to insert data.
+//! 4. Querying data using SQL and displaying the results.
 
-use db::*;
+use db::{Database, Value};
 
 fn main() -> Result<(), String> {
-    println!("In-Memory Database Demo\n");
+    println!("--- In-Memory Database SQL Demo ---\n");
 
-    // Create  DB
-    let mut db = database::Database::new();
+    // Initialize the database engine.
+    // We use the re-exported Database type from the crate root.
+    let mut db = Database::new();
 
-    // Create table "users"
-    let schema = table::Schema {
-        columns: vec![
-            table::ColumnDef {
-                name: "id".into(),
-                data_type: data_type::DataType::Int,
-            },
-            table::ColumnDef {
-                name: "name".into(),
-                data_type: data_type::DataType::Text,
-            },
-            table::ColumnDef {
-                name: "age".into(),
-                data_type: data_type::DataType::Int,
-            },
-        ],
-    };
+    // 1. Create a table using a raw SQL string.
+    // This triggers the Tokenizer and Parser internally.
+    println!("Step 1: Creating table...");
+    db.execute("CREATE TABLE users (id INT, name TEXT, age INT)")?;
+    println!("Table 'users' created successfully.\n");
 
-    db.create_table("users".into(), schema)?;
-    println!("Created table 'users'");
+    // 2. Insert data using SQL.
+    // We show different ways to insert: standard order, reordered columns, and partial columns (NULLs).
+    println!("Step 2: Inserting data...");
+    db.execute("INSERT INTO users (id, name, age) VALUES (1, 'Alice', 30)")?;
+    db.execute("INSERT INTO users (name, id) VALUES ('Bob', 2)")?; // Order doesn't matter
+    db.execute("INSERT INTO users (id, name) VALUES (3, 'Charlie')")?; // Age will be NULL
+    println!("3 rows inserted.\n");
 
-    // Insert data
-    println!("Inserting data...");
-    {
-        let table = db.get_table_mut("users").unwrap();
+    // 3. Query the data.
+    // The query method returns a QueryResult containing column names and rows.
+    println!("Step 3: Querying data (SELECT * FROM users):");
+    let result = db.query("SELECT * FROM users")?;
 
-        table.insert(vec![
-            Value::Int(1),
-            Value::Text(Arc::from("Alice")),
-            Value::Int(30),
-        ])?;
+    // Display the header
+    for col_name in &result.columns {
+        print!("{:<10} ", col_name.to_uppercase());
+    }
+    println!("\n{}", "-".repeat(result.columns.len() * 11));
 
-        table.insert(vec![
-            Value::Int(2),
-            Value::Text(Arc::from("Bob")),
-            Value::Null, // Bob's age is unknown
-        ])?;
-
-        table.insert(vec![
-            Value::Int(3),
-            Value::Text(Arc::from("Charlie")),
-            Value::Int(25),
-        ])?;
-
-        println!("Inserted 3 rows\n");
+    // Display the rows
+    for row in result.rows {
+        for value in row {
+            let display = match value {
+                Value::Int(i) => i.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::Text(s) => s.to_string(),
+                Value::Bool(b) => b.to_string().to_uppercase(),
+                Value::Null => "NULL".to_string(),
+            };
+            print!("{:<10} ", display);
+        }
+        println!();
     }
 
-    // Read and Printing data
-    println!("Reading data:");
-    println!("{:<5} {:<10} {:<5}", "ID", "NAME", "AGE");
-    println!("{}", "-".repeat(25));
+    // 4. List metadata.
+    println!("\nStep 4: Database Metadata:");
+    let tables = db.list_tables();
+    println!("Existing tables: {:?}", tables);
 
-    let table = db.get_table("users").unwrap();
-
-    for row_idx in 0..table.row_count {
-        let row = table.get_row(row_idx).unwrap();
-
-        let id = match &row[0] {
-            Value::Int(i) => i.to_string(),
-            _ => "?".into(),
-        };
-
-        let name = match &row[1] {
-            Value::Text(s) => s.to_string(),
-            _ => "NULL".into(),
-        };
-
-        let age = match &row[2] {
-            Value::Int(i) => i.to_string(),
-            Value::Null => "NULL".into(),
-            _ => "?".into(),
-        };
-
-        println!("{:<5} {:<10} {:<5}", id, name, age);
-    }
-
-    println!();
-
-    // List tables
-    println!("Tables in database:");
-    for table_name in db.list_tables() {
-        println!("  - {}", table_name);
-    }
-
+    println!("\nDemo completed successfully.");
     Ok(())
 }

@@ -3,12 +3,17 @@ use std::sync::Arc;
 use crate::tokenizer::Token;
 use crate::{ColumnDef, DataType, Value, ast::*};
 
+/// A recursive descent parser that transforms a sequence of [Token]s
+/// into an Abstract Syntax Tree (AST) represented by a [Statement].
 pub struct Parser {
+    /// The stream of tokens produced by the Tokenizer.
     tokens: Vec<Token>,
+    /// The current index in the token stream.
     position: usize,
 }
 
 impl Parser {
+    /// Creates a new parser from a list of tokens.
     pub fn new(tokens: Vec<Token>) -> Self {
         Self {
             tokens,
@@ -16,6 +21,14 @@ impl Parser {
         }
     }
 
+    /// Parses the tokens into a single [Statement].
+    ///
+    /// This is the main entry point of the parser. It identifies the statement type
+    /// (CREATE, INSERT, or SELECT) and ensures the entire input is consumed.
+    ///
+    /// # Errors
+    /// Returns an error string if the syntax is invalid or if trailing tokens
+    /// remain after a valid statement.
     pub fn parse(&mut self) -> Result<Statement, String> {
         let statement = match self.current_token() {
             Token::Create => self.parse_create_table(),
@@ -24,12 +37,12 @@ impl Parser {
             _ => Err(format!("Unexpected token: {:?}", self.current_token())),
         }?;
 
-        // semicolon is optionnal in SQL so skip it
+        // Semicolons are optional at the end of a statement
         if matches!(self.current_token(), Token::Semicolon) {
             self.advance();
         }
 
-        // Check we are at the end of the statement
+        // Check we are at the end of the statement to avoid ignored trailing syntax
         if !self.is_at_end() {
             return Err(format!(
                 "Unexpected token after statement: {:?}",
@@ -40,27 +53,32 @@ impl Parser {
         Ok(statement)
     }
 
-    //helpers
+    // --- Navigation Helpers ---
+
+    /// Returns a reference to the token at the current position.
     fn current_token(&self) -> &Token {
         &self.tokens[self.position]
     }
 
+    /// Advances the cursor to the next token.
     fn advance(&mut self) {
         if self.position < self.tokens.len() - 1 {
             self.position += 1;
         }
     }
 
+    /// Checks if the cursor has reached the end of the token stream.
     fn is_at_end(&self) -> bool {
         matches!(self.current_token(), Token::Eof)
     }
 
+    /// Validates that the current token matches the expected one and advances.
+    /// Returns an error if the token doesn't match.
     fn consume(&mut self, expected: Token) -> Result<(), String> {
         if *self.current_token() == expected {
             self.advance();
             Ok(())
         } else {
-            // Une erreur précise aide énormément au debug
             Err(format!(
                 "Expected {:?}, found {:?}",
                 expected,
@@ -69,11 +87,11 @@ impl Parser {
         }
     }
 
+    /// Specifically consumes an [Token::Ident] and returns its inner string.
     fn consume_ident(&mut self) -> Result<String, String> {
         match self.current_token() {
             Token::Ident(string) => {
-                // TODO: Should be zero-copy with references in token
-                let string = string.clone(); // Get the name
+                let string = string.clone();
                 self.advance();
                 Ok(string)
             }
@@ -84,6 +102,7 @@ impl Parser {
         }
     }
 
+    /// Consumes a literal token (Number, String, Bool) and converts it to a [Value].
     fn consume_value(&mut self) -> Result<Value, String> {
         match self.current_token() {
             Token::Number(nb) => {
@@ -109,10 +128,11 @@ impl Parser {
                 self.advance();
                 Ok(Value::Text(text))
             }
-            _ => Err(format!("Expected number, found {:?}", self.current_token())),
+            _ => Err(format!("Expected value, found {:?}", self.current_token())),
         }
     }
 
+    /// Maps a keyword token (like INT, TEXT) to a logical [DataType].
     fn consume_data_type(&mut self) -> Result<DataType, String> {
         match self.current_token() {
             Token::Int => {
@@ -132,25 +152,28 @@ impl Parser {
                 Ok(DataType::Float)
             }
             _ => Err(format!(
-                "current token {:?} is not a column type",
+                "Current token {:?} is not a supported data type",
                 self.current_token()
             )),
         }
     }
 
+    // --- Production Rules ---
+
+    /// Parses a column definition in a `CREATE TABLE` statement (e.g., `id INT`).
     fn parse_column_def(&mut self) -> Result<ColumnDef, String> {
         let name = self.consume_ident()?;
-
         let data_type = self.consume_data_type()?;
-
         Ok(ColumnDef { name, data_type })
     }
 
+    /// Parses a full `CREATE TABLE` statement.
     fn parse_create_table(&mut self) -> Result<Statement, String> {
-        self.consume(Token::Create)?; // advance if CREATE
-        self.consume(Token::Table)?; // advance if TABLE
+        self.consume(Token::Create)?;
+        self.consume(Token::Table)?;
         let name = self.consume_ident()?;
         self.consume(Token::LeftParen)?;
+
         let mut columns = vec![];
         loop {
             columns.push(self.parse_column_def()?);
@@ -169,23 +192,20 @@ impl Parser {
         Ok(Statement::CreateTable(CreateTable { name, columns }))
     }
 
+    /// Parses an `INSERT INTO` statement, handling optional column lists.
     fn parse_insert(&mut self) -> Result<Statement, String> {
         self.consume(Token::Insert)?;
         self.consume(Token::Into)?;
         let name = self.consume_ident()?;
 
-        // Columns are optionnal in SQL
+        // Columns are optional: INSERT INTO table (col1, col2) ... OR INSERT INTO table ...
         let columns = if matches!(self.current_token(), Token::LeftParen) {
             self.advance();
             let mut cols = vec![];
-
             loop {
                 cols.push(self.consume_ident()?);
-
                 match self.current_token() {
-                    Token::Comma => {
-                        self.advance();
-                    }
+                    Token::Comma => self.advance(),
                     Token::RightParen => {
                         self.advance();
                         break;
@@ -193,14 +213,14 @@ impl Parser {
                     _ => return Err("Expected ',' or ')'".into()),
                 }
             }
-
             Some(cols)
         } else {
-            None // no specified columns, use schema order
+            None
         };
 
         self.consume(Token::Values)?;
         self.consume(Token::LeftParen)?;
+
         let mut values = vec![];
         loop {
             values.push(self.consume_value()?);
@@ -210,11 +230,10 @@ impl Parser {
                     self.advance();
                     break;
                 }
-                _ => {
-                    return Err("Expected ',' or ')'".into());
-                }
+                _ => return Err("Expected ',' or ')'".into()),
             };
         }
+
         Ok(Statement::InsertInto(InsertInto {
             table: name,
             columns,
@@ -222,16 +241,15 @@ impl Parser {
         }))
     }
 
+    /// Parses the column selection part of a `SELECT` statement (e.g., `*` or `col1, col2`).
     fn parse_columns(&mut self) -> Result<ColumnsSelect, String> {
         match self.current_token() {
             Token::Star => {
                 self.advance();
                 Ok(ColumnsSelect::Star)
             }
-
             Token::Ident(_) => {
                 let mut cols = Vec::new();
-
                 loop {
                     match self.current_token() {
                         Token::Ident(name) => {
@@ -245,17 +263,15 @@ impl Parser {
                         self.advance();
                         continue;
                     }
-
                     break;
                 }
-
                 Ok(ColumnsSelect::ColumnsNames(cols))
             }
-
             _ => Err("Expected '*' or column name".into()),
         }
     }
 
+    /// Parses a `SELECT` statement.
     fn parse_select(&mut self) -> Result<Statement, String> {
         self.consume(Token::Select)?;
         let columns = self.parse_columns()?;

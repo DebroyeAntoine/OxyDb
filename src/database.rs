@@ -7,33 +7,48 @@ use crate::{
 };
 use std::collections::HashMap;
 
+/// The main entry point for the in-memory database engine.
+/// It manages a collection of tables and orchestrates query execution.
 #[derive(Default)]
 pub struct Database {
+    /// A map of table names to their respective [Table] structures.
     tables: HashMap<String, Table>,
 }
 
+/// Represents the result of a successful `SELECT` query.
 #[derive(Debug)]
 pub struct QueryResult {
+    /// The names of the columns included in the result set.
     pub columns: Vec<String>,
+    /// The actual data, returned as a vector of rows, where each row is a vector of [Value].
     pub rows: Vec<Vec<Value>>,
 }
 
 impl Database {
+    /// Creates a new, empty database instance.
     pub fn new() -> Self {
         Self {
             tables: HashMap::default(),
         }
     }
 
+    /// Creates a new table in the database.
+    ///
+    /// # Errors
+    /// Returns an error if a table with the same name already exists.
     pub fn create_table(&mut self, name: String, schema: Schema) -> Result<(), String> {
         if self.tables.contains_key(&name) {
             return Err(format!("Table {} already exists in the database", name));
         }
-        let table = Table::new(name.clone(), schema); // maybe use Arc later to avoid this clone
+        let table = Table::new(name.clone(), schema);
         self.tables.insert(name, table);
         Ok(())
     }
 
+    /// Removes a table from the database by its name.
+    ///
+    /// # Errors
+    /// Returns an error if the table does not exist.
     pub fn drop_table(&mut self, name: &str) -> Result<(), String> {
         match self.tables.remove(name) {
             Some(_) => Ok(()),
@@ -41,18 +56,39 @@ impl Database {
         }
     }
 
+    /// Retrieves a reference to a table by name.
     pub fn get_table(&self, name: &str) -> Option<&Table> {
         self.tables.get(name)
     }
 
+    /// Retrieves a mutable reference to a table by name.
     pub fn get_table_mut(&mut self, name: &str) -> Option<&mut Table> {
         self.tables.get_mut(name)
     }
 
+    /// Returns a list of all table names currently stored in the database.
     pub fn list_tables(&self) -> Vec<&str> {
         self.tables.iter().map(|m| m.0.as_str()).collect()
     }
 
+    /// Executes a SQL statement that modifies the database state (DDL/DML).
+    ///
+    /// This handles `CREATE TABLE` and `INSERT INTO`.
+    /// For data retrieval, use [Database::query] instead.
+    ///
+    /// # Errors
+    /// Returns an error if tokenization, parsing, or execution fails.
+    ///
+    /// # Example
+    /// ```
+    /// use db::{Database, Value};
+    /// let mut db = Database::new();
+    /// db.execute("CREATE TABLE users (id INT)").unwrap();
+    /// db.execute("INSERT INTO users VALUES (1)").unwrap();
+    ///
+    /// let result = db.query("SELECT * FROM users").unwrap();
+    /// assert_eq!(result.rows[0][0], Value::Int(1));
+    /// ```
     pub fn execute(&mut self, sql: &str) -> Result<(), String> {
         let tokens = Tokenizer::new(sql).tokenize()?;
         let statement = Parser::new(tokens).parse()?;
@@ -77,6 +113,12 @@ impl Database {
         Ok(())
     }
 
+    /// Internal helper to handle row insertion logic.
+    ///
+    /// It maps provided values to the correct columns, handling cases where:
+    /// 1. Columns are not specified (positional insertion).
+    /// 2. Columns are specified in a different order than the schema.
+    /// 3. Some columns are missing (filling them with `NULL`).
     fn insert(&mut self, insert: InsertInto) -> Result<(), String> {
         let table = self
             .get_table_mut(&insert.table)
@@ -85,7 +127,7 @@ impl Database {
         let values = match insert.columns {
             None => insert.values,
             Some(columns) => {
-                // Check there is no column absent in the schema
+                // Validate that all specified columns exist in the schema
                 for col_name in &columns {
                     if !table.schema.columns.iter().any(|c| &c.name == col_name) {
                         return Err(format!(
@@ -94,12 +136,12 @@ impl Database {
                         ));
                     }
                 }
-                // create hashmap by zipping columns and moving cols and values by using
-                // into_iter()
+
+                // Map provided values to their column names
                 let mut provided_values: HashMap<String, Value> =
                     columns.into_iter().zip(insert.values).collect();
 
-                // row to be inserted with the same order as the schema
+                // Build the final row by following the schema's column order
                 table
                     .schema
                     .columns
@@ -111,22 +153,59 @@ impl Database {
 
         table.insert(values)
     }
+
+    /// Executes a `SELECT` query and returns the resulting data set.
+    ///
+    /// This method performs the full query lifecycle:
+    /// 1. **Tokenizes** the SQL string.
+    /// 2. **Parses** it into a `Select` AST node.
+    /// 3. **Projects** the requested columns from the columnar storage.
+    /// 4. **Pivots** the data from columns back into rows for the result.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use db::{Database, Value};
+    ///
+    /// let mut db = Database::new();
+    /// db.execute("CREATE TABLE products (name TEXT, price INT)").unwrap();
+    /// db.execute("INSERT INTO products VALUES ('Laptop', 1200)").unwrap();
+    /// db.execute("INSERT INTO products VALUES ('Mouse', 25)").unwrap();
+    ///
+    /// // Querying specific columns
+    /// let result = db.query("SELECT name FROM products").unwrap();
+    ///
+    /// assert_eq!(result.columns, vec!["name"]);
+    /// assert_eq!(result.rows.len(), 2);
+    /// assert_eq!(result.rows[0][0], Value::Text("Laptop".into()));
+    /// assert_eq!(result.rows[1][0], Value::Text("Mouse".into()));
+    /// ```
+    ///
+    /// # Errors
+    /// Returns an error string if:
+    /// - The SQL is not a valid `SELECT` statement.
+    /// - The specified table does not exist.
+    /// - One or more specified columns do not exist.
     pub fn query(&self, sql: &str) -> Result<QueryResult, String> {
         let tokens = Tokenizer::new(sql).tokenize()?;
         let statement = Parser::new(tokens).parse()?;
+
         if !matches!(statement, Statement::Select(_)) {
             return Err(format!(
                 "Statement {:?} is not a queryable statement",
                 statement
             ));
         }
+
         let Statement::Select(select) = statement else {
             unreachable!()
         };
+
         let table = self
             .get_table(&select.table)
             .ok_or_else(|| format!("table {:?} does not exist", select.table))?;
 
+        // Resolve which columns need to be projected
         let selected_cols = match select.columns {
             ColumnsSelect::Star => table
                 .schema
@@ -137,6 +216,7 @@ impl Database {
             ColumnsSelect::ColumnsNames(cols) => cols,
         };
 
+        // Extract data from columnar storage
         let cols_data: Vec<Vec<Value>> = selected_cols
             .iter()
             .map(|col| {
@@ -151,7 +231,8 @@ impl Database {
             })
             .collect::<Result<Vec<_>, String>>()?;
 
-        // transform colmuns vec to row vec
+        // Pivot: transform the data from Column-oriented (Vec of Columns)
+        // to Row-oriented (Vec of Rows) for the final result.
         let row_count = if cols_data.is_empty() {
             0
         } else {

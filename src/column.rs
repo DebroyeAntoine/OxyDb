@@ -4,23 +4,38 @@ use crate::data_type::DataType;
 use crate::value::Value;
 use bitvec::prelude::*;
 
+/// Physical storage for column data.
+/// Each variant wraps a collection of a specific type to ensure contiguous memory
+/// allocation (columnar storage).
 #[derive(Debug, Clone)]
 pub enum ColumnData {
+    /// Vector of 64-bit integers.
     Int(Vec<i64>),
+    /// Vector of 64-bit floats.
     Float(Vec<f64>),
+    /// Vector of thread-safe atomic reference-counted strings.
     Text(Vec<Arc<str>>),
-    Bool(BitVec), // ← Déjà compact !
+    /// Compact bit-vector for boolean values.
+    Bool(BitVec),
 }
 
+/// Represents a column within a table.
+/// It combines metadata (name, type) with actual data and a nullability tracker.
 #[derive(Debug, Clone)]
 pub struct Column {
+    /// The name of the column.
     pub name: String,
+    /// The logical data type of the column.
     pub data_type: DataType,
+    /// The actual values stored in the column.
     pub data: ColumnData,
+    /// A bitmap where a `true` bit indicates that the value at that index is `NULL`.
     pub null_bitmap: BitVec,
 }
 
 impl Column {
+    /// Creates a new, empty column with the specified name and data type.
+    /// The underlying data storage is initialized according to the data type.
     pub fn new(name: String, data_type: DataType) -> Self {
         let data = match data_type {
             DataType::Int => ColumnData::Int(vec![]),
@@ -36,10 +51,32 @@ impl Column {
         }
     }
 
+    /// Appends a new value to the end of the column.
+    ///
+    /// # Errors
+    /// Returns an error if the value's type does not match the column's data type.
+    ///
+    /// # Behavior
+    /// - If the value is `Null`, a default "dummy" value is pushed to the data vector
+    ///   to maintain index alignment with the `null_bitmap`.
+    /// - If the value is not `Null`, it is added to the data vector and the bitmap is updated.
+    ///
+    /// # Example
+    /// ```
+    /// # use db::column::Column;
+    /// # use db::data_type::DataType;
+    /// # use db::value::Value;
+    /// let mut col = Column::new("age".into(), DataType::Int);
+    /// col.push(Value::Int(30)).unwrap();
+    /// col.push(Value::Null).unwrap();
+    ///
+    /// assert_eq!(col.len(), 2);
+    /// assert!(col.get(1).unwrap().is_null());
+    /// ```
     pub fn push(&mut self, value: Value) -> Result<(), String> {
         if value.is_null() {
             self.null_bitmap.push(true);
-            // add default value to keep alignment between vec and bitvec
+            // Add default value to keep alignment between the data vector and the bitmap
             match &mut self.data {
                 ColumnData::Int(v) => v.push(0),
                 ColumnData::Float(v) => v.push(0.0),
@@ -49,6 +86,7 @@ impl Column {
 
             return Ok(());
         }
+
         if value.data_type() != Some(self.data_type) {
             return Err(format!(
                 "Value {value:?} has type {:?} while column data type is {:?}",
@@ -73,10 +111,20 @@ impl Column {
         Ok(())
     }
 
+    /// Returns the number of rows currently stored in the column.
     pub fn len(&self) -> usize {
         self.null_bitmap.len()
     }
 
+    /// Returns true if there is no row in the column, else false.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Retrieves the value at the specified row index.
+    ///
+    /// Returns `Some(Value)` if the index is valid, or `None` if it is out of bounds.
+    /// If the `null_bitmap` indicates a null at the index, `Some(Value::Null)` is returned.
     pub fn get(&self, row_idx: usize) -> Option<Value> {
         if row_idx >= self.len() {
             return None;
@@ -92,7 +140,6 @@ impl Column {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

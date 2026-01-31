@@ -2,26 +2,41 @@ use crate::column::Column;
 use crate::data_type::DataType;
 use crate::value::Value;
 
-/// Column definition in the schema
+/// Represents the definition of a single column in a table's schema.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnDef {
+    /// The name of the column.
     pub name: String,
+    /// The data type allowed for this column.
     pub data_type: DataType,
 }
 
+/// Defines the structure of a table, consisting of an ordered list of column definitions.
 #[derive(Debug, Clone)]
 pub struct Schema {
+    /// The ordered collection of column definitions.
     pub columns: Vec<ColumnDef>,
 }
 
+/// Represents a database table stored in memory.
+///
+/// Data is stored in a columnar format (one [Column] per schema field) to improve
+/// memory locality and performance for analytical queries.
 pub struct Table {
+    /// The unique name of the table.
     pub name: String,
+    /// The structural definition of the table.
     pub schema: Schema,
+    /// The actual data storage, where each [Column] matches a [ColumnDef] in the schema.
     pub columns: Vec<Column>,
+    /// The total number of rows currently stored in the table.
     pub row_count: usize,
 }
 
 impl Table {
+    /// Creates a new table with the given name and schema.
+    ///
+    /// This initializes the underlying [Column] storage for each field defined in the schema.
     pub fn new(name: String, schema: Schema) -> Self {
         let columns = schema
             .columns
@@ -36,9 +51,14 @@ impl Table {
         }
     }
 
-    /// insert a new row
+    /// Appends a new row of values to the table.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The number of values provided does not match the number of columns in the schema.
+    /// - The data type of any value does not match the corresponding column's data type.
     pub fn insert(&mut self, values: Vec<Value>) -> Result<(), String> {
-        // different sizes
+        // Validate row length
         if values.len() != self.schema.columns.len() {
             return Err(format!(
                 "size of the row mismatched with the size of a table row, {:?} vs {:?}",
@@ -46,8 +66,9 @@ impl Table {
                 self.schema.columns.len()
             ));
         }
+
+        // Validate types and push values to respective columns
         for (i, value) in values.into_iter().enumerate() {
-            // different types
             if value
                 .data_type()
                 .is_some_and(|t| t != self.schema.columns[i].data_type)
@@ -61,20 +82,27 @@ impl Table {
             }
             self.columns[i].push(value)?;
         }
+
         self.row_count += 1;
         Ok(())
     }
 
+    /// Retrieves a full row of values at the specified index.
+    ///
+    /// Since the database is columnar, this method reconstructs the row by
+    /// fetching the value at `row_idx` from every column.
+    ///
+    /// Returns `None` if the index is out of bounds.
     pub fn get_row(&self, row_idx: usize) -> Option<Vec<Value>> {
         if self.row_count <= row_idx {
             return None;
         }
-        self.columns
-            .iter()
-            .map(|col| col.get(row_idx)) // -> Option<Value>
-            .collect()
+        self.columns.iter().map(|col| col.get(row_idx)).collect() // Reconstructs the row as Vec<Value>
     }
 
+    /// Finds and returns a reference to a specific column by its name.
+    ///
+    /// Returns `None` if no column with the given name exists in this table.
     pub fn get_col(&self, name: &str) -> Option<&Column> {
         self.columns.iter().find(|col| col.name == name)
     }
