@@ -21,6 +21,8 @@ pub enum Token {
     Number(i64),    // 42
     String(String), // 'Alice'
     FloatNumber(f64),
+    True,
+    False,
 
     // Symbols
     LeftParen,  // (
@@ -128,6 +130,8 @@ impl Tokenizer {
             "TEXT" => Ok(Token::Text),
             "FLOAT" => Ok(Token::Float),
             "BOOL" => Ok(Token::Bool),
+            "TRUE" => Ok(Token::True),
+            "FALSE" => Ok(Token::False),
             _ => Ok(Token::Ident(ident)),
         }
     }

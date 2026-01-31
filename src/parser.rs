@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use crate::tokenizer::Token;
-use crate::{ast::*, ColumnDef, DataType};
+use crate::{ColumnDef, DataType, Value, ast::*};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -17,7 +19,7 @@ impl Parser {
     pub fn parse(&mut self) -> Result<Statement, String> {
         let statement = match self.current_token() {
             Token::Create => self.parse_create_table(),
-            //Token::Insert => self.parse_insert(),
+            Token::Insert => self.parse_insert(),
             //Token::Select => self.parse_select(),
             _ => Err(format!("Unexpected token: {:?}", self.current_token())),
         }?;
@@ -70,6 +72,7 @@ impl Parser {
     fn consume_ident(&mut self) -> Result<String, String> {
         match self.current_token() {
             Token::Ident(string) => {
+                // TODO: Should be zero-copy with references in token
                 let string = string.clone(); // Get the name
                 self.advance();
                 Ok(string)
@@ -78,6 +81,35 @@ impl Parser {
                 "Expected identifier, found {:?}",
                 self.current_token()
             )),
+        }
+    }
+
+    fn consume_value(&mut self) -> Result<Value, String> {
+        match self.current_token() {
+            Token::Number(nb) => {
+                let nb_copy = *nb;
+                self.advance();
+                Ok(Value::Int(nb_copy))
+            }
+            Token::FloatNumber(nb) => {
+                let nb_copy = *nb;
+                self.advance();
+                Ok(Value::Float(nb_copy))
+            }
+            Token::True => {
+                self.advance();
+                Ok(Value::Bool(true))
+            }
+            Token::False => {
+                self.advance();
+                Ok(Value::Bool(false))
+            }
+            Token::String(string) => {
+                let text = Arc::from(string.as_str());
+                self.advance();
+                Ok(Value::Text(text))
+            }
+            _ => Err(format!("Expected number, found {:?}", self.current_token())),
         }
     }
 
@@ -136,6 +168,59 @@ impl Parser {
         }
         Ok(Statement::CreateTable(CreateTable { name, columns }))
     }
+
+    fn parse_insert(&mut self) -> Result<Statement, String> {
+        self.consume(Token::Insert)?;
+        self.consume(Token::Into)?;
+        let name = self.consume_ident()?;
+
+        // Columns are optionnal in SQL
+        let columns = if matches!(self.current_token(), Token::LeftParen) {
+            self.advance();
+            let mut cols = vec![];
+
+            loop {
+                cols.push(self.consume_ident()?);
+
+                match self.current_token() {
+                    Token::Comma => {
+                        self.advance();
+                    }
+                    Token::RightParen => {
+                        self.advance();
+                        break;
+                    }
+                    _ => return Err("Expected ',' or ')'".into()),
+                }
+            }
+
+            Some(cols)
+        } else {
+            None // no specified columns, use schema order
+        };
+
+        self.consume(Token::Values)?;
+        self.consume(Token::LeftParen)?;
+        let mut values = vec![];
+        loop {
+            values.push(self.consume_value()?);
+            match self.current_token() {
+                Token::Comma => self.advance(),
+                Token::RightParen => {
+                    self.advance();
+                    break;
+                }
+                _ => {
+                    return Err("Expected ',' or ')'".into());
+                }
+            };
+        }
+        Ok(Statement::InsertInto(InsertInto {
+            table: name,
+            columns,
+            values,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -162,6 +247,48 @@ mod tests {
                 assert_eq!(ct.columns[1].data_type, DataType::Text);
             }
             _ => panic!("Expected CreateTable"),
+        }
+    }
+
+    #[test]
+    fn test_parse_insert() {
+        let sql = "INSERT INTO users (id, name) VALUES (1, 'Alice')";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        match statement {
+            Statement::InsertInto(ins) => {
+                assert_eq!(ins.table, "users");
+                assert_eq!(ins.columns, Some(vec!["id".into(), "name".into()]));
+                assert_eq!(ins.values.len(), 2);
+                assert_eq!(ins.values[0], Value::Int(1));
+                assert_eq!(ins.values[1], Value::Text(Arc::from("Alice")));
+            }
+            _ => panic!("Expected InsertInto"),
+        }
+    }
+
+    #[test]
+    fn test_parse_insert_no_columns() {
+        let sql = "INSERT INTO users VALUES (1, 'Alice')";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        match statement {
+            Statement::InsertInto(ins) => {
+                assert_eq!(ins.table, "users");
+                assert_eq!(ins.columns, None);
+                assert_eq!(ins.values.len(), 2);
+                assert_eq!(ins.values[0], Value::Int(1));
+                assert_eq!(ins.values[1], Value::Text(Arc::from("Alice")));
+            }
+            _ => panic!("Expected InsertInto"),
         }
     }
 }
