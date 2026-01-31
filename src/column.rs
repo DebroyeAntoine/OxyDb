@@ -73,7 +73,7 @@ impl Column {
         Ok(())
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.null_bitmap.len()
     }
 

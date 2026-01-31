@@ -1,18 +1,19 @@
 use crate::{ColumnDef, Value};
 
+#[derive(Debug, PartialEq)]
 pub enum Statement {
     CreateTable(CreateTable),
     InsertInto(InsertInto),
     Select(Select),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct CreateTable {
     pub name: String,
     pub columns: Vec<ColumnDef>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct InsertInto {
     pub table: String,
     pub columns: Option<Vec<String>>,
@@ -25,7 +26,7 @@ pub enum ColumnsSelect {
     ColumnsNames(Vec<String>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Select {
     pub columns: ColumnsSelect,
     pub table: String,
