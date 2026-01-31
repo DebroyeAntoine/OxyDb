@@ -1,6 +1,7 @@
 use crate::table::{Schema, Table};
 use std::collections::HashMap;
 
+#[derive(Default)]
 pub struct Database {
     tables: HashMap<String, Table>,
 }
@@ -8,7 +9,7 @@ pub struct Database {
 impl Database {
     pub fn new() -> Self {
         Self {
-            tables: HashMap::new(),
+            tables: HashMap::default(),
         }
     }
 
@@ -67,9 +68,10 @@ mod tests {
     fn test_create_and_drop_table() {
         let mut db = Database::new();
 
-        assert!(db
-            .create_table("users".to_string(), simple_schema())
-            .is_ok());
+        assert!(
+            db.create_table("users".to_string(), simple_schema())
+                .is_ok()
+        );
         assert!(db.get_table("users").is_some());
 
         assert!(db.drop_table("users").is_ok());
@@ -80,9 +82,10 @@ mod tests {
     fn test_duplicate_table_error() {
         let mut db = Database::new();
 
-        assert!(db
-            .create_table("users".to_string(), simple_schema())
-            .is_ok());
+        assert!(
+            db.create_table("users".to_string(), simple_schema())
+                .is_ok()
+        );
         let err = db.create_table("users".to_string(), simple_schema());
 
         assert!(err.is_err());
