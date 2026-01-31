@@ -52,4 +52,36 @@ pub struct Select {
     pub columns: ColumnsSelect,
     /// The name of the table to query data from.
     pub table: String,
+
+    /// Where clause optionnal
+    pub where_clause: Option<Expr>,
+}
+
+/// Represents a boolean comparison operation between a column and a literal value.
+#[derive(Debug, PartialEq)]
+pub enum ComparisonOp {
+    /// Greater than (`>`)
+    Gt,
+    /// Lower than (`<`)
+    Lt,
+    /// Equal (`=`)
+    Eq,
+}
+
+/// A recursive expression tree used in `WHERE` clauses to filter rows.
+#[derive(Debug, PartialEq)]
+pub enum Expr {
+    /// A leaf node: compares a specific column to a constant value.
+    Comparison {
+        /// The name of the column to evaluate.
+        column: String,
+        /// The operator to apply.
+        op: ComparisonOp,
+        /// The constant value to compare against.
+        value: Value,
+    },
+    /// A logical AND operation. Both sides must be true.
+    And { left: Box<Expr>, right: Box<Expr> },
+    /// A logical OR operation. At least one side must be true.
+    Or { left: Box<Expr>, right: Box<Expr> },
 }
