@@ -1,6 +1,6 @@
 use crate::{
     Value,
-    ast::{ColumnsSelect, InsertInto, Statement},
+    ast::{ColumnsSelect, ComparisonOp, Expr, InsertInto, Statement},
     parser::Parser,
     table::{Schema, Table},
     tokenizer::Tokenizer,
@@ -216,16 +216,18 @@ impl Database {
             ColumnsSelect::ColumnsNames(cols) => cols,
         };
 
-        // Extract data from columnar storage
-        let cols_data: Vec<Vec<Value>> = selected_cols
+        let all_cols_data: Vec<Vec<Value>> = table
+            .schema
+            .columns
             .iter()
-            .map(|col| {
-                let column_table = table
-                    .get_col(col)
-                    .ok_or_else(|| format!("column {:?} does not exist", col))?;
-                let mut data = Vec::with_capacity(column_table.len());
-                for d in 0..column_table.len() {
-                    data.push(column_table.get(d).unwrap_or(Value::Null))
+            .map(|col_def| {
+                let column = table
+                    .get_col(&col_def.name)
+                    .ok_or_else(|| format!("column {:?} does not exist", col_def.name))?;
+
+                let mut data = Vec::with_capacity(column.len());
+                for i in 0..column.len() {
+                    data.push(column.get(i).unwrap_or(Value::Null));
                 }
                 Ok(data)
             })
@@ -233,25 +235,150 @@ impl Database {
 
         // Pivot: transform the data from Column-oriented (Vec of Columns)
         // to Row-oriented (Vec of Rows) for the final result.
-        let row_count = if cols_data.is_empty() {
+        let row_count = if all_cols_data.is_empty() {
             0
         } else {
-            cols_data[0].len()
+            all_cols_data[0].len()
         };
-        let mut final_rows = Vec::with_capacity(row_count);
+
+        let mut filtered_rows = Vec::with_capacity(row_count);
 
         for i in 0..row_count {
-            let mut row = Vec::with_capacity(cols_data.len());
-            for col in &cols_data {
-                row.push(col[i].clone());
+            let mut full_row = Vec::with_capacity(all_cols_data.len());
+            for col in &all_cols_data {
+                full_row.push(col[i].clone());
             }
-            final_rows.push(row);
+
+            let should_include = match &select.where_clause {
+                Some(where_expr) => self.evaluate_expr(where_expr, &full_row, &table.schema)?,
+                None => true,
+            };
+
+            if should_include {
+                filtered_rows.push(full_row);
+            }
         }
+
+        let final_rows: Vec<Vec<Value>> = filtered_rows
+            .into_iter()
+            .map(|full_row| {
+                selected_cols
+                    .iter()
+                    .map(|col_name| {
+                        let idx = table
+                            .schema
+                            .columns
+                            .iter()
+                            .position(|c| &c.name == col_name)
+                            .unwrap();
+                        full_row[idx].clone()
+                    })
+                    .collect()
+            })
+            .collect();
 
         Ok(QueryResult {
             columns: selected_cols,
             rows: final_rows,
         })
+    }
+
+    /// Evaluates a WHERE clause expression against a specific row.
+    ///
+    /// This function recursively evaluates:
+    /// - **Comparisons**: Column values compared to literals (`age > 18`)
+    /// - **AND**: Logical conjunction with short-circuit evaluation
+    /// - **OR**: Logical disjunction with short-circuit evaluation
+    ///
+    /// # Arguments
+    /// * `expr` - The expression tree to evaluate
+    /// * `row` - The complete row (all columns in schema order)
+    /// * `schema` - Table schema used to resolve column indices
+    ///
+    /// # Returns
+    /// * `Ok(true)` - The row satisfies the condition
+    /// * `Ok(false)` - The row does not match
+    /// * `Err(...)` - Invalid column name or type mismatch
+    /// ```
+    fn evaluate_expr(&self, expr: &Expr, row: &[Value], schema: &Schema) -> Result<bool, String> {
+        match expr {
+            Expr::Comparison { column, op, value } => {
+                let col_idx = schema
+                    .columns
+                    .iter()
+                    .position(|c| &c.name == column)
+                    .ok_or_else(|| format!("Column {} not found", column))?;
+
+                // 2. Récupérer la valeur dans la row
+                let row_value = &row[col_idx];
+
+                // 3. Comparer (la vérification de type est DANS compare_values)
+                self.compare_values(row_value, op, value)
+            }
+            Expr::Or { left, right } => {
+                Ok(self.evaluate_expr(left, row, schema)?
+                    || self.evaluate_expr(right, row, schema)?)
+            }
+            Expr::And { left, right } => {
+                let left_result = self.evaluate_expr(left, row, schema)?;
+                if !left_result {
+                    return Ok(false); // Short-circuit !
+                }
+                self.evaluate_expr(right, row, schema)
+            }
+        }
+    }
+
+    /// Compares two values using a comparison operator.
+    ///
+    /// # SQL NULL Semantics
+    /// - `NULL` compared to anything (including `NULL`) always returns `false`.
+    /// - This matches standard SQL three-valued logic.
+    ///
+    /// # Supported Comparisons
+    /// - **Integers**: `>`, `<`, `=`
+    /// - **Floats**: `>`, `<`, `=` (with epsilon comparison)
+    /// - **Text**: `=` (exact string match)
+    /// - **Booleans**: `=`
+    ///
+    /// # Errors
+    /// Returns an error if comparing incompatible types (e.g., `Int` vs `Text`).
+    fn compare_values(
+        &self,
+        left: &Value,
+        op: &ComparisonOp,
+        right: &Value,
+    ) -> Result<bool, String> {
+        // NULL handling : NULL comparé à quoi que ce soit = false
+        if matches!(left, Value::Null) || matches!(right, Value::Null) {
+            return Ok(false);
+        }
+
+        match (left, op, right) {
+            // Int comparisons
+            (Value::Int(l), ComparisonOp::Gt, Value::Int(r)) => Ok(l > r),
+            (Value::Int(l), ComparisonOp::Lt, Value::Int(r)) => Ok(l < r),
+            (Value::Int(l), ComparisonOp::Eq, Value::Int(r)) => Ok(l == r),
+
+            // Float comparisons
+            (Value::Float(l), ComparisonOp::Gt, Value::Float(r)) => Ok(l > r),
+            (Value::Float(l), ComparisonOp::Lt, Value::Float(r)) => Ok(l < r),
+            (Value::Float(l), ComparisonOp::Eq, Value::Float(r)) => {
+                Ok((l - r).abs() < f64::EPSILON)
+            }
+
+            // Text comparisons
+            (Value::Text(l), ComparisonOp::Eq, Value::Text(r)) => Ok(l == r),
+
+            // Bool comparisons
+            (Value::Bool(l), ComparisonOp::Eq, Value::Bool(r)) => Ok(l == r),
+
+            // Type mismatch
+            _ => Err(format!(
+                "Type mismatch: cannot compare {:?} with {:?}",
+                left, right
+            )),
+        }
     }
 }
 
@@ -423,5 +550,69 @@ mod tests {
 
         assert_eq!(result.columns, vec!["name"]);
         assert_eq!(result.rows[0], vec![Value::Text("Alice".into())]);
+    }
+
+    #[test]
+    fn test_query_with_where_simple() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, name TEXT, age INT)")
+            .unwrap();
+        db.execute("INSERT INTO users VALUES (1, 'Alice', 30)")
+            .unwrap();
+        db.execute("INSERT INTO users VALUES (2, 'Bob', 17)")
+            .unwrap();
+        db.execute("INSERT INTO users VALUES (3, 'Charlie', 25)")
+            .unwrap();
+
+        let result = db.query("SELECT name FROM users WHERE age > 18").unwrap();
+
+        assert_eq!(result.columns, vec!["name"]);
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0], vec![Value::Text("Alice".into())]);
+        assert_eq!(result.rows[1], vec![Value::Text("Charlie".into())]);
+    }
+
+    #[test]
+    fn test_query_with_where_and() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, age INT, active INT)")
+            .unwrap();
+        db.execute("INSERT INTO users VALUES (1, 30, 1)").unwrap();
+        db.execute("INSERT INTO users VALUES (2, 17, 1)").unwrap();
+        db.execute("INSERT INTO users VALUES (3, 25, 0)").unwrap();
+
+        // WHERE age > 18 AND active = 1
+        let result = db
+            .query("SELECT id FROM users WHERE age > 18 AND active = 1")
+            .unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0], vec![Value::Int(1)]);
+    }
+
+    #[test]
+    fn test_query_with_null_comparison() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, age INT)").unwrap();
+        db.execute("INSERT INTO users (id) VALUES (1)").unwrap(); // age = NULL
+        db.execute("INSERT INTO users VALUES (2, 25)").unwrap();
+
+        // NULL > 18 should be false (SQL semantics)
+        let result = db.query("SELECT id FROM users WHERE age > 18").unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0], vec![Value::Int(2)]);
+    }
+
+    #[test]
+    fn test_query_with_where_no_match() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, age INT)").unwrap();
+        db.execute("INSERT INTO users VALUES (1, 10)").unwrap();
+        db.execute("INSERT INTO users VALUES (2, 15)").unwrap();
+
+        let result = db.query("SELECT id FROM users WHERE age > 100").unwrap();
+
+        assert_eq!(result.rows.len(), 0); // Aucune row ne match
     }
 }
