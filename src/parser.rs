@@ -285,10 +285,26 @@ impl Parser {
                 None
             }
         };
+        let limit = {
+            if *self.current_token() == Token::Limit {
+                self.advance();
+                match self.current_token() {
+                    Token::Number(n) => {
+                        let limit = *n as usize; // i64 → usize
+                        self.advance();
+                        Some(limit)
+                    }
+                    _ => return Err("LIMIT requires a number".into()),
+                }
+            } else {
+                None
+            }
+        };
         Ok(Statement::Select(Select {
             columns,
             table,
             where_clause,
+            limit,
         }))
     }
 

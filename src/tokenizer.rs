@@ -12,6 +12,7 @@ pub enum Token {
     Where,
     And,
     Or,
+    Limit,
 
     // --- Data Types ---
     Int,
@@ -201,6 +202,7 @@ impl Tokenizer {
             "FALSE" => Ok(Token::False),
             "AND" => Ok(Token::And),
             "OR" => Ok(Token::Or),
+            "LIMIT" => Ok(Token::Limit),
             _ => Ok(Token::Ident(ident)),
         }
     }

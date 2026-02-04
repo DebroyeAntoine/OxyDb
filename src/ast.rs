@@ -55,6 +55,8 @@ pub struct Select {
 
     /// Where clause optionnal
     pub where_clause: Option<Expr>,
+
+    pub limit: Option<usize>,
 }
 
 /// Represents a boolean comparison operation between a column and a literal value.

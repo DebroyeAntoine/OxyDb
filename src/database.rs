@@ -1,9 +1,9 @@
 use crate::{
-    Value,
     ast::{ColumnsSelect, ComparisonOp, Expr, InsertInto, Statement},
     parser::Parser,
     table::{Schema, Table},
     tokenizer::Tokenizer,
+    Value,
 };
 use std::collections::HashMap;
 
@@ -275,6 +275,7 @@ impl Database {
                     })
                     .collect()
             })
+            .take(select.limit.unwrap_or(usize::MAX))
             .collect();
 
         Ok(QueryResult {
@@ -309,10 +310,8 @@ impl Database {
                     .position(|c| &c.name == column)
                     .ok_or_else(|| format!("Column {} not found", column))?;
 
-                // 2. Récupérer la valeur dans la row
                 let row_value = &row[col_idx];
 
-                // 3. Comparer (la vérification de type est DANS compare_values)
                 self.compare_values(row_value, op, value)
             }
             Expr::Or { left, right } => {
@@ -322,7 +321,7 @@ impl Database {
             Expr::And { left, right } => {
                 let left_result = self.evaluate_expr(left, row, schema)?;
                 if !left_result {
-                    return Ok(false); // Short-circuit !
+                    return Ok(false);
                 }
                 self.evaluate_expr(right, row, schema)
             }
@@ -408,10 +407,9 @@ mod tests {
     fn test_create_and_drop_table() {
         let mut db = Database::new();
 
-        assert!(
-            db.create_table("users".to_string(), simple_schema())
-                .is_ok()
-        );
+        assert!(db
+            .create_table("users".to_string(), simple_schema())
+            .is_ok());
         assert!(db.get_table("users").is_some());
 
         assert!(db.drop_table("users").is_ok());
@@ -422,10 +420,9 @@ mod tests {
     fn test_duplicate_table_error() {
         let mut db = Database::new();
 
-        assert!(
-            db.create_table("users".to_string(), simple_schema())
-                .is_ok()
-        );
+        assert!(db
+            .create_table("users".to_string(), simple_schema())
+            .is_ok());
         let err = db.create_table("users".to_string(), simple_schema());
 
         assert!(err.is_err());
@@ -602,6 +599,23 @@ mod tests {
 
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0], vec![Value::Int(2)]);
+    }
+
+    #[test]
+    fn test_query_with_limit() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, age INT, active INT)")
+            .unwrap();
+        db.execute("INSERT INTO users VALUES (1, 30, 1)").unwrap();
+        db.execute("INSERT INTO users VALUES (2, 17, 1)").unwrap();
+        db.execute("INSERT INTO users VALUES (3, 25, 0)").unwrap();
+
+        // WHERE age > 18 AND active = 1
+        let result = db.query("SELECT id FROM users LIMIT 2").unwrap();
+
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0], vec![Value::Int(1)]);
+        assert_eq!(result.rows[1], vec![Value::Int(2)]);
     }
 
     #[test]
