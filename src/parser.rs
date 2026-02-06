@@ -300,11 +300,23 @@ impl Parser {
                 None
             }
         };
+
+        let order_by = {
+            if *self.current_token() == Token::Order {
+                self.advance();
+                self.consume(Token::By)?;
+                Some(self.parse_order_by()?)
+            } else {
+                None
+            }
+        };
+
         Ok(Statement::Select(Select {
             columns,
             table,
             where_clause,
             limit,
+            order_by,
         }))
     }
 
@@ -387,6 +399,45 @@ impl Parser {
         self.advance();
         let value = self.consume_value()?;
         Ok(Expr::Comparison { column, op, value })
+    }
+
+    /// Parses an `ORDER BY` clause.
+    ///
+    /// # Default Behavior
+    /// If no direction (`ASC` or `DESC`) is specified, defaults to `ASC`
+    /// per SQL standard.
+    ///
+    /// # Returns
+    /// A vector of [OrderByClause] in the order they should be applied.
+    /// The first clause has priority in sorting.
+    fn parse_order_by(&mut self) -> Result<Vec<OrderByClause>, String> {
+        let mut clauses = vec![];
+
+        loop {
+            let column = self.consume_ident()?;
+
+            let direction = match self.current_token() {
+                Token::Asc => {
+                    self.advance();
+                    SortDirection::Asc
+                }
+                Token::Desc => {
+                    self.advance();
+                    SortDirection::Desc
+                }
+                _ => SortDirection::Asc, // ASC by default
+            };
+
+            clauses.push(OrderByClause { column, direction });
+
+            if matches!(self.current_token(), Token::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        Ok(clauses)
     }
 }
 
@@ -534,6 +585,50 @@ mod tests {
         match statement {
             Statement::Select(sel) => {
                 assert!(matches!(sel.where_clause, Some(Expr::And { .. })));
+            }
+            _ => panic!("Expected Select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_single_order_by() {
+        let sql = "SELECT name FROM users ORDER BY age ASC";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        match statement {
+            Statement::Select(sel) => {
+                let order_by = sel.order_by.unwrap();
+                assert_eq!(order_by.len(), 1);
+                assert_eq!(order_by[0].column, "age");
+                assert_eq!(order_by[0].direction, SortDirection::Asc);
+            }
+            _ => panic!("Expected Select"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_multiple_order_by() {
+        let sql = "SELECT name FROM users ORDER BY age ASC, name DESC";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        match statement {
+            Statement::Select(sel) => {
+                let order_by = sel.order_by.unwrap();
+                assert_eq!(order_by.len(), 2);
+
+                assert_eq!(order_by[0].column, "age");
+                assert_eq!(order_by[0].direction, SortDirection::Asc);
+
+                assert_eq!(order_by[1].column, "name");
+                assert_eq!(order_by[1].direction, SortDirection::Desc);
             }
             _ => panic!("Expected Select"),
         }

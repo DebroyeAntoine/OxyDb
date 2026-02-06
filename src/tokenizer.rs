@@ -13,6 +13,10 @@ pub enum Token {
     And,
     Or,
     Limit,
+    Order,
+    By,
+    Asc,
+    Desc,
 
     // --- Data Types ---
     Int,
@@ -203,6 +207,10 @@ impl Tokenizer {
             "AND" => Ok(Token::And),
             "OR" => Ok(Token::Or),
             "LIMIT" => Ok(Token::Limit),
+            "ORDER" => Ok(Token::Order),
+            "BY" => Ok(Token::By),
+            "ASC" => Ok(Token::Asc),
+            "DESC" => Ok(Token::Desc),
             _ => Ok(Token::Ident(ident)),
         }
     }

@@ -56,7 +56,11 @@ pub struct Select {
     /// Where clause optionnal
     pub where_clause: Option<Expr>,
 
+    // Limit the number or rows to be shown optionnal
     pub limit: Option<usize>,
+
+    // Order by clause optionnal
+    pub order_by: Option<Vec<OrderByClause>>,
 }
 
 /// Represents a boolean comparison operation between a column and a literal value.
@@ -68,6 +72,33 @@ pub enum ComparisonOp {
     Lt,
     /// Equal (`=`)
     Eq,
+}
+
+/// Represents a single sorting criterion in an `ORDER BY` clause.
+///
+/// # Examples
+/// ```sql
+/// ORDER BY age ASC        -- Single clause
+/// ORDER BY age DESC, name ASC  -- Multiple clauses (age first, then name)
+/// ```
+#[derive(Debug, PartialEq, Clone)]
+pub struct OrderByClause {
+    /// The name of the column to sort by.
+    pub column: String,
+
+    /// The sort direction (ascending or descending).
+    pub direction: SortDirection,
+}
+
+/// Defines the direction of sorting for an `ORDER BY` clause.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum SortDirection {
+    /// Sort in ascending order (smallest to largest, A-Z).
+    /// This is the SQL default if no direction is specified.
+    Asc,
+
+    /// Sort in descending order (largest to smallest, Z-A).
+    Desc,
 }
 
 /// A recursive expression tree used in `WHERE` clauses to filter rows.
