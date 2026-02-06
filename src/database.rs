@@ -1,9 +1,9 @@
 use crate::{
+    Value,
     ast::{ColumnsSelect, ComparisonOp, Expr, InsertInto, Statement},
     parser::Parser,
     table::{Schema, Table},
     tokenizer::Tokenizer,
-    Value,
 };
 use std::collections::HashMap;
 
@@ -407,9 +407,10 @@ mod tests {
     fn test_create_and_drop_table() {
         let mut db = Database::new();
 
-        assert!(db
-            .create_table("users".to_string(), simple_schema())
-            .is_ok());
+        assert!(
+            db.create_table("users".to_string(), simple_schema())
+                .is_ok()
+        );
         assert!(db.get_table("users").is_some());
 
         assert!(db.drop_table("users").is_ok());
@@ -420,9 +421,10 @@ mod tests {
     fn test_duplicate_table_error() {
         let mut db = Database::new();
 
-        assert!(db
-            .create_table("users".to_string(), simple_schema())
-            .is_ok());
+        assert!(
+            db.create_table("users".to_string(), simple_schema())
+                .is_ok()
+        );
         let err = db.create_table("users".to_string(), simple_schema());
 
         assert!(err.is_err());
