@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::data_type::DataType;
@@ -6,7 +7,7 @@ use crate::data_type::DataType;
 ///
 /// This enum wraps all supported Rust types into a single type that can be
 /// passed around the engine. It includes support for SQL `NULL` values.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     /// represents an empty or missing value.
     Null,
@@ -19,6 +20,51 @@ pub enum Value {
     Text(Arc<str>),
     /// A boolean value.
     Bool(bool),
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for Value {}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Implements a total ordering for [Value].
+///
+/// The ordering between different types is arbitrary but deterministic:
+/// Null < Int < Float < Text < Bool.
+///
+/// For Float values, NaN is considered smaller than any other non-NaN number.
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Int(a), Value::Int(b)) => a.cmp(b),
+            (Value::Float(a), Value::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Less),
+            (Value::Text(a), Value::Text(b)) => a.cmp(b),
+            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+
+            // ordre arbitraire entre types différents
+            (Value::Null, _) => Ordering::Less,
+            (_, Value::Null) => Ordering::Greater,
+
+            (Value::Int(_), _) => Ordering::Less,
+            (_, Value::Int(_)) => Ordering::Greater,
+
+            (Value::Float(_), _) => Ordering::Less,
+            (_, Value::Float(_)) => Ordering::Greater,
+
+            (Value::Text(_), _) => Ordering::Less,
+            (_, Value::Text(_)) => Ordering::Greater,
+        }
+    }
 }
 
 impl Value {
@@ -204,5 +250,16 @@ mod tests {
                 Value::Bool(b) => assert_eq!(v.as_bool(), Some(b)),
             }
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Test 10 : cmp order
+    // ─────────────────────────────────────────────────────────────
+    #[test]
+    fn test_type_hierarchy() {
+        assert!(Value::Null < Value::Int(0));
+        assert!(Value::Int(100) < Value::Float(0.0));
+        assert!(Value::Float(100.0) < Value::Text("abc".into()));
+        assert!(Value::Text("zzz".into()) < Value::Bool(false));
     }
 }
