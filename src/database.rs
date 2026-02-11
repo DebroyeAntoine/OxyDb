@@ -1,11 +1,11 @@
 use crate::{
-    Value,
-    ast::{ColumnsSelect, ComparisonOp, Expr, InsertInto, Statement},
+    ColumnDef, Value,
+    ast::{ColumnsSelect, ComparisonOp, Expr, InsertInto, OrderByClause, SortDirection, Statement},
     parser::Parser,
     table::{Schema, Table},
     tokenizer::Tokenizer,
 };
-use std::collections::HashMap;
+use std::{cmp::Ordering, collections::HashMap};
 
 /// The main entry point for the in-memory database engine.
 /// It manages a collection of tables and orchestrates query execution.
@@ -159,8 +159,11 @@ impl Database {
     /// This method performs the full query lifecycle:
     /// 1. **Tokenizes** the SQL string.
     /// 2. **Parses** it into a `Select` AST node.
-    /// 3. **Projects** the requested columns from the columnar storage.
-    /// 4. **Pivots** the data from columns back into rows for the result.
+    /// 3. **Pivots** the columnar data into rows.
+    /// 4. **Filters** rows based on the `WHERE` clause.
+    /// 5. **Sorts** the remaining rows based on the `ORDER BY` clause.
+    /// 6. **Projects** only the requested columns.
+    /// 7. **Limits** the number of rows returned.
     ///
     /// # Example
     ///
@@ -259,6 +262,10 @@ impl Database {
             }
         }
 
+        if let Some(order_by) = select.order_by.filter(|o| !o.is_empty()) {
+            self.sort(&mut filtered_rows, &table.schema.columns, order_by)?;
+        }
+
         let final_rows: Vec<Vec<Value>> = filtered_rows
             .into_iter()
             .map(|full_row| {
@@ -271,6 +278,7 @@ impl Database {
                             .iter()
                             .position(|c| &c.name == col_name)
                             .unwrap();
+                        // TODO: Use Rc or Arc to avoid clone
                         full_row[idx].clone()
                     })
                     .collect()
@@ -282,6 +290,51 @@ impl Database {
             columns: selected_cols,
             rows: final_rows,
         })
+    }
+
+    /// Sorts the provided rows in-place based on the SQL `ORDER BY` clauses.
+    ///
+    /// This method supports multi-column sorting. For each row comparison, it
+    /// iterates through the sort clauses: if the first column results in an
+    /// equal comparison, it moves to the next column, and so on.
+    ///
+    /// # Errors
+    /// Returns an error if a column specified in the `ORDER BY` clause
+    /// does not exist in the table schema.
+    fn sort(
+        &self,
+        rows: &mut [Vec<Value>],
+        cols: &[ColumnDef],
+        order_by: Vec<OrderByClause>,
+    ) -> Result<(), String> {
+        // save all column indexes on which we have to sort + boolean if we have to reverse order
+        let sort = order_by
+            .iter()
+            .map(|clause| {
+                let idx = cols
+                    .iter()
+                    .position(|c| c.name == clause.column)
+                    .ok_or_else(|| format!("Column {} not found", clause.column))?;
+                Ok((idx, clause.direction == SortDirection::Desc))
+            })
+            .collect::<Result<Vec<(usize, bool)>, String>>()?;
+
+        rows.sort_by(|a, b| {
+            for (idx, is_desc) in &sort {
+                let mut ord = a[*idx].cmp(&b[*idx]);
+
+                if *is_desc {
+                    ord = ord.reverse();
+                }
+                // if it's not equal no need to compare more
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            Ordering::Equal
+        });
+
+        Ok(())
     }
 
     /// Evaluates a WHERE clause expression against a specific row.
@@ -629,6 +682,77 @@ mod tests {
 
         let result = db.query("SELECT id FROM users WHERE age > 100").unwrap();
 
-        assert_eq!(result.rows.len(), 0); // Aucune row ne match
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_query_order_by_asc_desc() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, age INT)").unwrap();
+        db.execute("INSERT INTO users VALUES (1, 30)").unwrap();
+        db.execute("INSERT INTO users VALUES (2, 20)").unwrap();
+        db.execute("INSERT INTO users VALUES (3, 25)").unwrap();
+
+        // Test ASC
+        let res_asc = db.query("SELECT age FROM users ORDER BY age ASC").unwrap();
+        assert_eq!(res_asc.rows[0][0], Value::Int(20));
+        assert_eq!(res_asc.rows[2][0], Value::Int(30));
+
+        // Test DESC
+        let res_desc = db.query("SELECT age FROM users ORDER BY age DESC").unwrap();
+        assert_eq!(res_desc.rows[0][0], Value::Int(30));
+        assert_eq!(res_desc.rows[2][0], Value::Int(20));
+    }
+
+    #[test]
+    fn test_query_order_by_multiple_columns() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (name TEXT, score INT)")
+            .unwrap();
+        db.execute("INSERT INTO users VALUES ('Alice', 100)")
+            .unwrap();
+        db.execute("INSERT INTO users VALUES ('Bob', 100)").unwrap();
+        db.execute("INSERT INTO users VALUES ('Charlie', 50)")
+            .unwrap();
+
+        let res = db
+            .query("SELECT name, score FROM users ORDER BY score DESC, name ASC")
+            .unwrap();
+
+        assert_eq!(res.rows[0][0], Value::Text("Alice".into()));
+        assert_eq!(res.rows[1][0], Value::Text("Bob".into()));
+        assert_eq!(res.rows[2][0], Value::Text("Charlie".into()));
+    }
+
+    #[test]
+    fn test_query_order_by_hidden_column() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, age INT)").unwrap();
+        db.execute("INSERT INTO users VALUES (1, 30)").unwrap();
+        db.execute("INSERT INTO users VALUES (2, 20)").unwrap();
+
+        let res = db.query("SELECT id FROM users ORDER BY age ASC").unwrap();
+
+        assert_eq!(res.columns, vec!["id"]);
+        assert_eq!(res.rows[0][0], Value::Int(2)); // age 20
+        assert_eq!(res.rows[1][0], Value::Int(1)); // age 30
+    }
+
+    #[test]
+    fn test_query_order_by_with_limit() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT)").unwrap();
+        for i in 1..=10 {
+            db.execute(&format!("INSERT INTO users VALUES ({})", i))
+                .unwrap();
+        }
+
+        let res = db
+            .query("SELECT id FROM users ORDER BY id DESC LIMIT 3")
+            .unwrap();
+
+        assert_eq!(res.rows.len(), 3);
+        assert_eq!(res.rows[0][0], Value::Int(10));
+        assert_eq!(res.rows[2][0], Value::Int(8));
     }
 }

@@ -285,6 +285,16 @@ impl Parser {
                 None
             }
         };
+        let order_by = {
+            if *self.current_token() == Token::Order {
+                self.advance();
+                self.consume(Token::By)?;
+                Some(self.parse_order_by()?)
+            } else {
+                None
+            }
+        };
+
         let limit = {
             if *self.current_token() == Token::Limit {
                 self.advance();
@@ -296,16 +306,6 @@ impl Parser {
                     }
                     _ => return Err("LIMIT requires a number".into()),
                 }
-            } else {
-                None
-            }
-        };
-
-        let order_by = {
-            if *self.current_token() == Token::Order {
-                self.advance();
-                self.consume(Token::By)?;
-                Some(self.parse_order_by()?)
             } else {
                 None
             }
