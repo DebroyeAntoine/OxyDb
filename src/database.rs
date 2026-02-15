@@ -154,6 +154,58 @@ impl Database {
         table.insert(values)
     }
 
+    /// This method will return all rows of the selected table if no where clause is given or will
+    /// return only rows matching the where instructions.
+    fn get_specific_rows(
+        &self,
+        table: &Table,
+        where_clause: &Option<Expr>,
+    ) -> Result<Vec<Vec<Value>>, String> {
+        let all_cols_data: Vec<Vec<Value>> = table
+            .schema
+            .columns
+            .iter()
+            .map(|col_def| {
+                let column = table
+                    .get_col(&col_def.name)
+                    .ok_or_else(|| format!("column {:?} does not exist", col_def.name))?;
+
+                let mut data = Vec::with_capacity(column.len());
+                for i in 0..column.len() {
+                    data.push(column.get(i).unwrap_or(Value::Null));
+                }
+                Ok(data)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        // Pivot: transform the data from Column-oriented (Vec of Columns)
+        // to Row-oriented (Vec of Rows) for the final result.
+        let row_count = if all_cols_data.is_empty() {
+            0
+        } else {
+            all_cols_data[0].len()
+        };
+
+        let mut filtered_rows = Vec::with_capacity(row_count);
+
+        for i in 0..row_count {
+            let mut full_row = Vec::with_capacity(all_cols_data.len());
+            for col in &all_cols_data {
+                full_row.push(col[i].clone());
+            }
+
+            let should_include = match where_clause {
+                Some(where_expr) => self.evaluate_expr(where_expr, &full_row, &table.schema)?,
+                None => true,
+            };
+
+            if should_include {
+                filtered_rows.push(full_row);
+            }
+        }
+        Ok(filtered_rows)
+    }
+
     /// Executes a `SELECT` query and returns the resulting data set.
     ///
     /// This method performs the full query lifecycle:
@@ -219,48 +271,7 @@ impl Database {
             ColumnsSelect::ColumnsNames(cols) => cols,
         };
 
-        let all_cols_data: Vec<Vec<Value>> = table
-            .schema
-            .columns
-            .iter()
-            .map(|col_def| {
-                let column = table
-                    .get_col(&col_def.name)
-                    .ok_or_else(|| format!("column {:?} does not exist", col_def.name))?;
-
-                let mut data = Vec::with_capacity(column.len());
-                for i in 0..column.len() {
-                    data.push(column.get(i).unwrap_or(Value::Null));
-                }
-                Ok(data)
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-
-        // Pivot: transform the data from Column-oriented (Vec of Columns)
-        // to Row-oriented (Vec of Rows) for the final result.
-        let row_count = if all_cols_data.is_empty() {
-            0
-        } else {
-            all_cols_data[0].len()
-        };
-
-        let mut filtered_rows = Vec::with_capacity(row_count);
-
-        for i in 0..row_count {
-            let mut full_row = Vec::with_capacity(all_cols_data.len());
-            for col in &all_cols_data {
-                full_row.push(col[i].clone());
-            }
-
-            let should_include = match &select.where_clause {
-                Some(where_expr) => self.evaluate_expr(where_expr, &full_row, &table.schema)?,
-                None => true,
-            };
-
-            if should_include {
-                filtered_rows.push(full_row);
-            }
-        }
+        let mut filtered_rows = self.get_specific_rows(table, &select.where_clause)?;
 
         if let Some(order_by) = select.order_by.filter(|o| !o.is_empty()) {
             self.sort(&mut filtered_rows, &table.schema.columns, order_by)?;
