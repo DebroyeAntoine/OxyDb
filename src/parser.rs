@@ -34,6 +34,7 @@ impl Parser {
             Token::Create => self.parse_create_table(),
             Token::Insert => self.parse_insert(),
             Token::Select => self.parse_select(),
+            Token::Delete => self.parse_delete(),
             _ => Err(format!("Unexpected token: {:?}", self.current_token())),
         }?;
 
@@ -317,6 +318,19 @@ impl Parser {
             where_clause,
             limit,
             order_by,
+        }))
+    }
+
+    /// Parses a DELETE statement.
+    fn parse_delete(&mut self) -> Result<Statement, String> {
+        self.consume(Token::Delete)?;
+        self.consume(Token::From)?;
+        let table = self.consume_ident()?;
+        self.consume(Token::Where)?;
+        let where_clause = self.parse_expression()?;
+        Ok(Statement::Delete(Delete {
+            table,
+            where_clause,
         }))
     }
 
@@ -632,5 +646,54 @@ mod tests {
             }
             _ => panic!("Expected Select"),
         }
+    }
+
+    #[test]
+    fn test_parse_delete_simple_where() {
+        let sql = "DELETE FROM users WHERE age > 12";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        let expected = Statement::Delete(Delete {
+            table: "users".to_string(),
+            where_clause: Expr::Comparison {
+                column: "age".to_string(),
+                op: ComparisonOp::Gt,
+                value: Value::Int(12),
+            },
+        });
+
+        assert_eq!(statement, expected);
+    }
+
+    #[test]
+    fn test_parse_delete_where_and() {
+        let sql = "DELETE FROM users WHERE age > 12 AND name = 'John'";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        let expected = Statement::Delete(Delete {
+            table: "users".to_string(),
+            where_clause: Expr::And {
+                left: Box::new(Expr::Comparison {
+                    column: "age".to_string(),
+                    op: ComparisonOp::Gt,
+                    value: Value::Int(12),
+                }),
+                right: Box::new(Expr::Comparison {
+                    column: "name".to_string(),
+                    op: ComparisonOp::Eq,
+                    value: Value::Text("John".into()),
+                }),
+            },
+        });
+
+        assert_eq!(statement, expected);
     }
 }

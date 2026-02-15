@@ -10,6 +10,8 @@ pub enum Statement {
     InsertInto(InsertInto),
     /// An instruction to query and retrieve data from a table.
     Select(Select),
+    /// An instruction to delete data matching the query.
+    Delete(Delete),
 }
 
 /// Data structure representing a `CREATE TABLE` SQL statement.
@@ -61,6 +63,17 @@ pub struct Select {
 
     // Order by clause optionnal
     pub order_by: Option<Vec<OrderByClause>>,
+}
+
+/// Data structure representing a `DELETE` SQL statement.
+/// Used to define which rows to be deleted in a specific table
+#[derive(Debug, PartialEq)]
+pub struct Delete {
+    /// The name of the table to query data from.
+    pub table: String,
+
+    /// Where clause
+    pub where_clause: Expr,
 }
 
 /// Represents a boolean comparison operation between a column and a literal value.
