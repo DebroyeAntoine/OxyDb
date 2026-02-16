@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{ColumnDef, Value};
 
 /// Represents the top-level SQL statements supported by the database.
@@ -12,6 +14,8 @@ pub enum Statement {
     Select(Select),
     /// An instruction to delete data matching the query.
     Delete(Delete),
+    /// An instruction to update data mathcing the query.
+    Update(Update),
 }
 
 /// Data structure representing a `CREATE TABLE` SQL statement.
@@ -130,4 +134,20 @@ pub enum Expr {
     And { left: Box<Expr>, right: Box<Expr> },
     /// A logical OR operation. At least one side must be true.
     Or { left: Box<Expr>, right: Box<Expr> },
+}
+
+/// Data structure representing an `UPDATE` SQL statement.
+/// Used to modify existing rows in a table.
+#[derive(Debug, PartialEq)]
+pub struct Update {
+    /// The name of the table to update.
+    pub table: String,
+
+    /// List of column assignments (column_name, new_value).
+    /// The order doesn't matter as each assignment is independent.
+    pub assignments: HashMap<String, Value>,
+
+    /// WHERE clause to filter which rows to update.
+    /// All matching rows will have their specified columns updated.
+    pub where_clause: Expr,
 }

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::tokenizer::Token;
@@ -35,6 +36,7 @@ impl Parser {
             Token::Insert => self.parse_insert(),
             Token::Select => self.parse_select(),
             Token::Delete => self.parse_delete(),
+            Token::Update => self.parse_update(),
             _ => Err(format!("Unexpected token: {:?}", self.current_token())),
         }?;
 
@@ -330,6 +332,35 @@ impl Parser {
         let where_clause = self.parse_expression()?;
         Ok(Statement::Delete(Delete {
             table,
+            where_clause,
+        }))
+    }
+
+    /// Parses an UPDATE statement.
+    fn parse_update(&mut self) -> Result<Statement, String> {
+        self.consume(Token::Update)?;
+        let table = self.consume_ident()?;
+        self.consume(Token::Set)?;
+        let mut values = HashMap::new();
+        loop {
+            let col = self.consume_ident()?;
+            self.consume(Token::Equal)?;
+            let value = self.consume_value()?;
+            // as if there is some columns twice in the order, SQL parsing must only understand the
+            // last one.
+            values.insert(col, value);
+            if *self.current_token() == Token::Comma {
+                self.advance();
+                continue;
+            } else {
+                break;
+            }
+        }
+        self.consume(Token::Where)?;
+        let where_clause = self.parse_expression()?;
+        Ok(Statement::Update(Update {
+            table,
+            assignments: values,
             where_clause,
         }))
     }
@@ -691,6 +722,31 @@ mod tests {
                     op: ComparisonOp::Eq,
                     value: Value::Text("John".into()),
                 }),
+            },
+        });
+
+        assert_eq!(statement, expected);
+    }
+
+    #[test]
+    fn test_parse_update_simple_where() {
+        let sql = "UPDATE users SET name='Bob' WHERE age > 12";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        let mut values = HashMap::new();
+        values.insert("name".into(), Value::Text("Bob".into()));
+
+        let expected = Statement::Update(Update {
+            table: "users".to_string(),
+            assignments: values,
+            where_clause: Expr::Comparison {
+                column: "age".to_string(),
+                op: ComparisonOp::Gt,
+                value: Value::Int(12),
             },
         });
 
