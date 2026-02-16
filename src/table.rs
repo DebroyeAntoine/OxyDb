@@ -118,6 +118,13 @@ impl Table {
     pub fn get_col(&self, name: &str) -> Option<&Column> {
         self.columns.iter().find(|col| col.name == name)
     }
+
+    /// Finds and returns a mutable reference to a specific column by its name.
+    ///
+    /// Returns `None` if no column with the given name exists in this table.
+    pub fn get_col_mut(&mut self, name: &str) -> Option<&mut Column> {
+        self.columns.iter_mut().find(|col| col.name == name)
+    }
 }
 
 #[cfg(test)]

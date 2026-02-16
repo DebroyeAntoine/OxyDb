@@ -165,6 +165,50 @@ impl Column {
         self.null_bitmap.remove(row_idx);
         Ok(())
     }
+
+    /// Replace a value in the column by a new value.
+    ///
+    /// # Errors
+    /// Returns an error if the row_idx is too high or if the value's type does not match the
+    /// column's data type.
+    ///
+    /// # Behavior
+    /// - If the new value is `Null`, the previous value is not changed but only the null_bitmap to
+    ///   be faster.
+    pub fn set(&mut self, row_idx: usize, value: Value) -> Result<(), String> {
+        if self.len() <= row_idx {
+            return Err("The row index is too high".into());
+        }
+
+        // NULL handling
+        if value.is_null() {
+            self.null_bitmap.set(row_idx, true);
+            // no need to change the value as null_bitmap is the first value checked at get.
+            return Ok(());
+        }
+
+        if value.data_type() != Some(self.data_type) {
+            return Err(format!(
+                "Value {value:?} has type {:?} while column data type is {:?}",
+                value.data_type(),
+                self.data_type
+            ));
+        }
+
+        self.null_bitmap.set(row_idx, false);
+        match (&mut self.data, value) {
+            (ColumnData::Int(col), Value::Int(v)) => col[row_idx] = v,
+            (ColumnData::Float(col), Value::Float(v)) => col[row_idx] = v,
+            (ColumnData::Text(col), Value::Text(v)) => col[row_idx] = v,
+            (ColumnData::Bool(col), Value::Bool(v)) => {
+                col.replace(row_idx, v);
+            }
+            _ => {
+                return Err("Internal error: type mismatch".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -311,5 +355,35 @@ mod tests {
         assert!(!col.null_bitmap[0]);
         assert_eq!(col.get(1), Some(Value::Null));
         assert!(col.null_bitmap[1]);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Test 9 : change a value
+    // ─────────────────────────────────────────────────────────────
+    #[test]
+    fn test_column_set() {
+        let mut col = Column::new("age".into(), DataType::Int);
+        col.push(Value::Int(30)).unwrap();
+        col.push(Value::Null).unwrap();
+
+        // Modifier une valeur existante
+        col.set(0, Value::Int(31)).unwrap();
+        assert_eq!(col.get(0), Some(Value::Int(31)));
+
+        // Remplacer NULL par une valeur
+        col.set(1, Value::Int(25)).unwrap();
+        assert_eq!(col.get(1), Some(Value::Int(25)));
+        assert!(!col.null_bitmap[1]);
+
+        // Remplacer une valeur par NULL
+        col.set(0, Value::Null).unwrap();
+        assert_eq!(col.get(0), Some(Value::Null));
+        assert!(col.null_bitmap[0]);
+
+        // Type mismatch
+        assert!(col.set(0, Value::Text("hello".into())).is_err());
+
+        // Out of bounds
+        assert!(col.set(10, Value::Int(42)).is_err());
     }
 }
