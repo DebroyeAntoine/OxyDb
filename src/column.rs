@@ -139,7 +139,34 @@ impl Column {
             ColumnData::Bool(col) => Some(Value::Bool(col[row_idx])),
         }
     }
+
+    /// Remove the value at the specified row index.
+    ///
+    /// Returns `Ok(())` if the index is valid or an `Err(String)` if it is out of bounds
+    pub fn remove(&mut self, row_idx: usize) -> Result<(), String> {
+        // TODO Use a deletion vector later
+        if self.len() <= row_idx {
+            return Err("The row index is too high".into());
+        }
+        match &mut self.data {
+            ColumnData::Int(col) => {
+                col.remove(row_idx);
+            }
+            ColumnData::Text(col) => {
+                col.remove(row_idx);
+            }
+            ColumnData::Bool(col) => {
+                col.remove(row_idx);
+            }
+            ColumnData::Float(col) => {
+                col.remove(row_idx);
+            }
+        }
+        self.null_bitmap.remove(row_idx);
+        Ok(())
+    }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,7 +274,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Test 7 : colonn full of Null
+    // Test 7 : column full of Null
     // ─────────────────────────────────────────────────────────────
     #[test]
     fn test_all_nulls() {
@@ -263,5 +290,26 @@ mod tests {
             assert!(col.get(i).unwrap().is_null());
             assert!(col.null_bitmap[i]);
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Test 8 : remove a value
+    // ─────────────────────────────────────────────────────────────
+    #[test]
+    fn test_delete() {
+        let mut col = Column::new("test".into(), DataType::Int);
+
+        col.push(Value::Int(42)).unwrap();
+        col.push(Value::Int(59)).unwrap();
+        col.push(Value::Null).unwrap();
+
+        assert_eq!(col.len(), 3);
+
+        col.remove(1).unwrap();
+        assert_eq!(col.len(), 2);
+        assert_eq!(col.get(0), Some(Value::Int(42)));
+        assert!(!col.null_bitmap[0]);
+        assert_eq!(col.get(1), Some(Value::Null));
+        assert!(col.null_bitmap[1]);
     }
 }
