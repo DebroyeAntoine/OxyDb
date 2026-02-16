@@ -22,6 +22,7 @@ pub struct Schema {
 ///
 /// Data is stored in a columnar format (one [Column] per schema field) to improve
 /// memory locality and performance for analytical queries.
+#[derive(Debug)]
 pub struct Table {
     /// The unique name of the table.
     pub name: String,
@@ -98,6 +99,17 @@ impl Table {
             return None;
         }
         self.columns.iter().map(|col| col.get(row_idx)).collect() // Reconstructs the row as Vec<Value>
+    }
+
+    /// Delete a full row at the specific index.
+    ///
+    /// Returns a result if the remove as failed to catch the error.
+    pub fn delete_row(&mut self, row_idx: usize) -> Result<(), String> {
+        self.columns
+            .iter_mut()
+            .try_for_each(|col| col.remove(row_idx))?;
+        self.row_count -= 1;
+        Ok(())
     }
 
     /// Finds and returns a reference to a specific column by its name.
@@ -217,5 +229,34 @@ mod tests {
         assert!(table.get_col("id").is_some());
         assert!(table.get_col("name").is_some());
         assert!(table.get_col("age").is_none());
+    }
+
+    #[test]
+    fn test_remove_row() {
+        let schema = Schema {
+            columns: vec![
+                ColumnDef {
+                    name: "id".into(),
+                    data_type: DataType::Int,
+                },
+                ColumnDef {
+                    name: "age".into(),
+                    data_type: DataType::Int,
+                },
+            ],
+        };
+
+        let mut table = Table::new("users".into(), schema);
+
+        table.insert(vec![Value::Int(1), Value::Int(30)]).unwrap();
+        table.insert(vec![Value::Int(2), Value::Null]).unwrap();
+
+        assert_eq!(table.row_count, 2);
+
+        table.delete_row(0).unwrap();
+
+        assert_eq!(table.row_count, 1);
+        let row0 = table.get_row(0).unwrap();
+        assert_eq!(row0, vec![Value::Int(2), Value::Null]);
     }
 }
