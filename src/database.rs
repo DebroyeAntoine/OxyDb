@@ -1,6 +1,9 @@
 use crate::{
     ColumnDef, Value,
-    ast::{ColumnsSelect, ComparisonOp, Expr, InsertInto, OrderByClause, SortDirection, Statement},
+    ast::{
+        ColumnsSelect, ComparisonOp, Delete, Expr, InsertInto, OrderByClause, SortDirection,
+        Statement,
+    },
     parser::Parser,
     table::{Schema, Table},
     tokenizer::Tokenizer,
@@ -85,6 +88,7 @@ impl Database {
     /// let mut db = Database::new();
     /// db.execute("CREATE TABLE users (id INT)").unwrap();
     /// db.execute("INSERT INTO users VALUES (1)").unwrap();
+    /// db.execute("DELETE FROM users WHERE id > 12").unwrap();
     ///
     /// let result = db.query("SELECT * FROM users").unwrap();
     /// assert_eq!(result.rows[0][0], Value::Int(1));
@@ -102,6 +106,9 @@ impl Database {
             )?,
             Statement::InsertInto(insert) => {
                 self.insert(insert)?;
+            }
+            Statement::Delete(delete) => {
+                self.delete(delete)?;
             }
             _ => {
                 return Err(format!(
@@ -154,13 +161,27 @@ impl Database {
         table.insert(values)
     }
 
-    /// This method will return all rows of the selected table if no where clause is given or will
-    /// return only rows matching the where instructions.
-    fn get_specific_rows(
+    /// A generic helper function to filter rows within a table.
+    ///
+    /// This method performs the following operations:
+    /// 1. Pivots the data from column-oriented format to row-oriented format.
+    /// 2. Evaluates the provided `WHERE` clause for every row.
+    /// 3. Applies a mapping function (`map_fn`) to rows that satisfy the condition.
+    ///
+    /// # Arguments
+    /// * `table` - A reference to the table to be scanned.
+    /// * `where_clause` - An optional expression used to filter rows.
+    /// * `map_fn` - A closure that determines what data to collect for each matching row
+    ///   (e.g., the row's index or the row's values).
+    fn filter_rows<T, F>(
         &self,
         table: &Table,
-        where_clause: &Option<Expr>,
-    ) -> Result<Vec<Vec<Value>>, String> {
+        where_clause: Option<&Expr>,
+        mut map_fn: F,
+    ) -> Result<Vec<T>, String>
+    where
+        F: FnMut(usize, &Vec<Value>) -> T,
+    {
         let all_cols_data: Vec<Vec<Value>> = table
             .schema
             .columns
@@ -180,30 +201,62 @@ impl Database {
 
         // Pivot: transform the data from Column-oriented (Vec of Columns)
         // to Row-oriented (Vec of Rows) for the final result.
-        let row_count = if all_cols_data.is_empty() {
-            0
-        } else {
-            all_cols_data[0].len()
-        };
-
-        let mut filtered_rows = Vec::with_capacity(row_count);
+        let row_count = all_cols_data.first().map(|c| c.len()).unwrap_or(0);
+        let mut results = Vec::new();
 
         for i in 0..row_count {
-            let mut full_row = Vec::with_capacity(all_cols_data.len());
-            for col in &all_cols_data {
-                full_row.push(col[i].clone());
-            }
+            let full_row: Vec<Value> = all_cols_data.iter().map(|col| col[i].clone()).collect();
 
             let should_include = match where_clause {
-                Some(where_expr) => self.evaluate_expr(where_expr, &full_row, &table.schema)?,
+                Some(expr) => self.evaluate_expr(expr, &full_row, &table.schema)?,
                 None => true,
             };
 
             if should_include {
-                filtered_rows.push(full_row);
+                // use closure to know what to store (index or row matching select clause)
+                results.push(map_fn(i, &full_row));
             }
         }
-        Ok(filtered_rows)
+
+        Ok(results)
+    }
+
+    /// Executes a `DELETE` statement.
+    ///
+    /// Deletion is performed in two phases:
+    /// 1. Identification: It finds the indices of all rows matching the `WHERE` clause.
+    /// 2. Removal: It removes those rows from the table storage.
+    ///
+    /// Note: Indices are sorted in descending order before deletion. This ensures that
+    /// removing a row doesn't shift the positions of other rows that are still
+    /// scheduled for deletion.
+    ///
+    /// # Errors
+    /// Returns an error if the table is not found or if the `WHERE` clause contains
+    /// invalid column names or type mismatches.
+    fn delete(&mut self, delete: Delete) -> Result<(), String> {
+        let rows_to_delete = {
+            let table = self
+                .get_table(&delete.table)
+                .ok_or_else(|| format!("table {:?} does not exist", delete.table))?;
+
+            self.filter_rows(table, Some(&delete.where_clause), |i, _| i)?
+        };
+
+        let table = self
+            .get_table_mut(&delete.table)
+            .ok_or_else(|| format!("table {:?} does not exist", delete.table))?;
+
+        let mut rows = rows_to_delete;
+        // use sort_unstable_by because rows indexes are unique and so we don't care about egality
+        // order.
+        rows.sort_unstable_by(|a, b| b.cmp(a));
+
+        for index in rows {
+            table.delete_row(index)?;
+        }
+
+        Ok(())
     }
 
     /// Executes a `SELECT` query and returns the resulting data set.
@@ -271,7 +324,8 @@ impl Database {
             ColumnsSelect::ColumnsNames(cols) => cols,
         };
 
-        let mut filtered_rows = self.get_specific_rows(table, &select.where_clause)?;
+        let mut filtered_rows =
+            self.filter_rows(table, select.where_clause.as_ref(), |_, row| row.clone())?;
 
         if let Some(order_by) = select.order_by.filter(|o| !o.is_empty()) {
             self.sort(&mut filtered_rows, &table.schema.columns, order_by)?;
@@ -765,5 +819,87 @@ mod tests {
         assert_eq!(res.rows.len(), 3);
         assert_eq!(res.rows[0][0], Value::Int(10));
         assert_eq!(res.rows[2][0], Value::Int(8));
+    }
+
+    #[test]
+    fn test_delete_specific_row() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, name TEXT)")
+            .unwrap();
+        db.execute("INSERT INTO users VALUES (1, 'Alice')").unwrap();
+        db.execute("INSERT INTO users VALUES (2, 'Bob')").unwrap();
+
+        // Delete Alice
+        db.execute("DELETE FROM users WHERE id = 1").unwrap();
+
+        let result = db.query("SELECT * FROM users").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Int(2)); // Only Bob remains
+        assert_eq!(result.rows[0][1], Value::Text("Bob".into()));
+    }
+
+    #[test]
+    fn test_delete_multiple_rows() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE products (id INT, price INT)")
+            .unwrap();
+        db.execute("INSERT INTO products VALUES (1, 10)").unwrap();
+        db.execute("INSERT INTO products VALUES (2, 50)").unwrap();
+        db.execute("INSERT INTO products VALUES (3, 100)").unwrap();
+        db.execute("INSERT INTO products VALUES (4, 20)").unwrap();
+
+        // Delete all expensive products (> 40)
+        db.execute("DELETE FROM products WHERE price > 40").unwrap();
+
+        let result = db.query("SELECT id FROM products ORDER BY id ASC").unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Int(1));
+        assert_eq!(result.rows[1][0], Value::Int(4));
+    }
+
+    #[test]
+    fn test_delete_no_match() {
+        let mut db = Database::new();
+        db.create_table("users".to_string(), simple_schema())
+            .unwrap();
+        db.execute("INSERT INTO users VALUES (1, 'Alice')").unwrap();
+
+        // Try to delete a non-matching row
+        db.execute("DELETE FROM users WHERE id = 99").unwrap();
+
+        let result = db.query("SELECT id FROM users").unwrap();
+        assert_eq!(result.rows.len(), 1); // The row is still there
+    }
+
+    #[test]
+    fn test_delete_with_complex_condition() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE tasks (id INT, priority INT, done INT)")
+            .unwrap();
+        db.execute("INSERT INTO tasks VALUES (1, 1, 1)").unwrap(); // High priority, finished
+        db.execute("INSERT INTO tasks VALUES (2, 1, 0)").unwrap(); // High priority, not finished
+        db.execute("INSERT INTO tasks VALUES (3, 5, 1)").unwrap(); // Low priority, finished
+
+        // Delete tasks that are either low priority OR already finished
+        db.execute("DELETE FROM tasks WHERE priority > 3 OR done = 1")
+            .unwrap();
+
+        let result = db.query("SELECT id FROM tasks").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Int(2)); // Only task 2 remains
+    }
+
+    #[test]
+    fn test_delete_all_rows_condition() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE data (id INT)").unwrap();
+        db.execute("INSERT INTO data VALUES (1)").unwrap();
+        db.execute("INSERT INTO data VALUES (2)").unwrap();
+
+        // Use a condition that is always true to empty the table
+        db.execute("DELETE FROM data WHERE id > 0").unwrap();
+
+        let result = db.query("SELECT * FROM data").unwrap();
+        assert_eq!(result.rows.len(), 0);
     }
 }
