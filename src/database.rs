@@ -2,7 +2,7 @@ use crate::{
     ColumnDef, Value,
     ast::{
         ColumnsSelect, ComparisonOp, Delete, Expr, InsertInto, OrderByClause, SortDirection,
-        Statement,
+        Statement, Update,
     },
     parser::Parser,
     table::{Schema, Table},
@@ -109,6 +109,9 @@ impl Database {
             }
             Statement::Delete(delete) => {
                 self.delete(delete)?;
+            }
+            Statement::Update(update) => {
+                self.update(update)?;
             }
             _ => {
                 return Err(format!(
@@ -256,6 +259,41 @@ impl Database {
             table.delete_row(index)?;
         }
 
+        Ok(())
+    }
+
+    /// Executes an `UPDATE` statement to modify existing rows in a table.
+    ///
+    /// The update is performed in two phases:
+    /// 1. **Identification**: It scans the table to find indices of rows matching the `WHERE` clause.
+    /// 2. **Modification**: For every column assignment, it updates the values at the identified
+    ///    indices in the columnar storage.
+    ///
+    /// # Errors
+    /// Returns an error string if:
+    /// - The target table does not exist.
+    /// - One of the target columns does not exist.
+    /// - The provided value's type does not match the column's data type.
+    /// - The `WHERE` clause evaluation fails.
+    fn update(&mut self, update: Update) -> Result<(), String> {
+        let rows_to_update = {
+            let table = self
+                .get_table(&update.table)
+                .ok_or_else(|| format!("table {:?} does not exist", update.table))?;
+            self.filter_rows(table, Some(&update.where_clause), |i, _| i)?
+        };
+        let table = self
+            .get_table_mut(&update.table)
+            .ok_or_else(|| format!("table {:?} does not exist", update.table))?;
+        let mut rows = rows_to_update;
+        for (col, value) in update.assignments {
+            let column = table
+                .get_col_mut(&col)
+                .ok_or_else(|| format!("column {:?} is not a column from this table", col))?;
+            for row in &mut rows {
+                column.set(*row, &value)?;
+            }
+        }
         Ok(())
     }
 
@@ -901,5 +939,94 @@ mod tests {
 
         let result = db.query("SELECT * FROM data").unwrap();
         assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_update_single_column() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, age INT)").unwrap();
+        db.execute("INSERT INTO users VALUES (1, 30)").unwrap();
+        db.execute("INSERT INTO users VALUES (2, 20)").unwrap();
+
+        db.execute("UPDATE users SET age = 99 WHERE id = 1")
+            .unwrap();
+
+        let result = db.query("SELECT age FROM users ORDER BY id ASC").unwrap();
+        assert_eq!(result.rows[0][0], Value::Int(99)); // id=1, age modifié
+        assert_eq!(result.rows[1][0], Value::Int(20)); // id=2, inchangé
+    }
+    #[test]
+    fn test_update_multiple_columns() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE products (id INT, name TEXT, price INT)")
+            .unwrap();
+        db.execute("INSERT INTO products VALUES (1, 'Keyboard', 50)")
+            .unwrap();
+
+        // Update two columns simultaneously
+        db.execute("UPDATE products SET name = 'Mechanical Keyboard', price = 120 WHERE id = 1")
+            .unwrap();
+
+        let result = db.query("SELECT name, price FROM products").unwrap();
+        assert_eq!(result.rows[0][0], Value::Text("Mechanical Keyboard".into()));
+        assert_eq!(result.rows[0][1], Value::Int(120));
+    }
+
+    #[test]
+    fn test_update_with_complex_where() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE employees (id INT, dept TEXT, salary INT)")
+            .unwrap();
+        db.execute("INSERT INTO employees VALUES (1, 'IT', 3000)")
+            .unwrap();
+        db.execute("INSERT INTO employees VALUES (2, 'HR', 2500)")
+            .unwrap();
+        db.execute("INSERT INTO employees VALUES (3, 'IT', 3500)")
+            .unwrap();
+
+        db.execute("UPDATE employees SET salary = 3300 WHERE dept = 'IT' AND salary < 3200")
+            .unwrap();
+
+        let result = db
+            .query("SELECT id, salary FROM employees ORDER BY id ASC")
+            .unwrap();
+        assert_eq!(result.rows[0][1], Value::Int(3300));
+        assert_eq!(result.rows[1][1], Value::Int(2500));
+        assert_eq!(result.rows[2][1], Value::Int(3500));
+    }
+
+    #[test]
+    fn test_update_type_mismatch_error() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE test (id INT)").unwrap();
+        db.execute("INSERT INTO test VALUES (1)").unwrap();
+
+        let result = db.execute("UPDATE test SET id = 'Invalid' WHERE id = 1");
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("type"));
+    }
+
+    #[test]
+    fn test_update_no_rows_matched() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE test (id INT, val INT)").unwrap();
+        db.execute("INSERT INTO test VALUES (1, 10)").unwrap();
+
+        db.execute("UPDATE test SET val = 99 WHERE id = 404")
+            .unwrap();
+
+        let result = db.query("SELECT val FROM test").unwrap();
+        assert_eq!(result.rows[0][0], Value::Int(10));
+    }
+
+    #[test]
+    fn test_update_non_existent_column() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE test (id INT)").unwrap();
+        db.execute("INSERT INTO test VALUES (1)").unwrap();
+
+        let result = db.execute("UPDATE test SET unknown_col = 10 WHERE id = 1");
+        assert!(result.is_err());
     }
 }

@@ -175,7 +175,7 @@ impl Column {
     /// # Behavior
     /// - If the new value is `Null`, the previous value is not changed but only the null_bitmap to
     ///   be faster.
-    pub fn set(&mut self, row_idx: usize, value: Value) -> Result<(), String> {
+    pub fn set(&mut self, row_idx: usize, value: &Value) -> Result<(), String> {
         if self.len() <= row_idx {
             return Err("The row index is too high".into());
         }
@@ -197,11 +197,11 @@ impl Column {
 
         self.null_bitmap.set(row_idx, false);
         match (&mut self.data, value) {
-            (ColumnData::Int(col), Value::Int(v)) => col[row_idx] = v,
-            (ColumnData::Float(col), Value::Float(v)) => col[row_idx] = v,
-            (ColumnData::Text(col), Value::Text(v)) => col[row_idx] = v,
+            (ColumnData::Int(col), Value::Int(v)) => col[row_idx] = *v,
+            (ColumnData::Float(col), Value::Float(v)) => col[row_idx] = *v,
+            (ColumnData::Text(col), Value::Text(v)) => col[row_idx] = Arc::clone(v),
             (ColumnData::Bool(col), Value::Bool(v)) => {
-                col.replace(row_idx, v);
+                col.replace(row_idx, *v);
             }
             _ => {
                 return Err("Internal error: type mismatch".into());
@@ -366,24 +366,19 @@ mod tests {
         col.push(Value::Int(30)).unwrap();
         col.push(Value::Null).unwrap();
 
-        // Modifier une valeur existante
-        col.set(0, Value::Int(31)).unwrap();
+        col.set(0, &Value::Int(31)).unwrap();
         assert_eq!(col.get(0), Some(Value::Int(31)));
 
-        // Remplacer NULL par une valeur
-        col.set(1, Value::Int(25)).unwrap();
+        col.set(1, &Value::Int(25)).unwrap();
         assert_eq!(col.get(1), Some(Value::Int(25)));
         assert!(!col.null_bitmap[1]);
 
-        // Remplacer une valeur par NULL
-        col.set(0, Value::Null).unwrap();
+        col.set(0, &Value::Null).unwrap();
         assert_eq!(col.get(0), Some(Value::Null));
         assert!(col.null_bitmap[0]);
 
-        // Type mismatch
-        assert!(col.set(0, Value::Text("hello".into())).is_err());
+        assert!(col.set(0, &Value::Text("hello".into())).is_err());
 
-        // Out of bounds
-        assert!(col.set(10, Value::Int(42)).is_err());
+        assert!(col.set(10, &Value::Int(42)).is_err());
     }
 }
