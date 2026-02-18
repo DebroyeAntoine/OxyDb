@@ -1,65 +1,87 @@
-//! # Database Demo
+//! # OxyDB SQL Demo
 //!
-//! This example demonstrates the full end-to-end flow of the database:
-//! 1. Initializing the engine.
-//! 2. Executing SQL DDL (Data Definition Language) to create tables.
-//! 3. Executing SQL DML (Data Manipulation Language) to insert data.
-//! 4. Querying data using SQL and displaying the results.
+//! This example demonstrates the full capabilities of the OxyDB engine:
+//! 1. Initializing the engine and creating tables.
+//! 2. Advanced data insertion (named columns, partial data).
+//! 3. Data modification using UPDATE.
+//! 4. Row removal using DELETE with filtering.
+//! 5. Complex querying using WHERE, ORDER BY, and LIMIT.
 
 use db::{Database, Value};
 
 fn main() -> Result<(), String> {
-    println!("--- In-Memory Database SQL Demo ---\n");
+    println!("--- OxyDB In-Memory SQL Demo ---\n");
 
-    // Initialize the database engine.
-    // We use the re-exported Database type from the crate root.
     let mut db = Database::new();
 
-    // 1. Create a table using a raw SQL string.
-    // This triggers the Tokenizer and Parser internally.
-    println!("Step 1: Creating table...");
-    db.execute("CREATE TABLE users (id INT, name TEXT, age INT)")?;
-    println!("Table 'users' created successfully.\n");
+    // 1. DDL: Create a table
+    println!("Step 1: Creating table 'users'...");
+    db.execute("CREATE TABLE users (id INT, name TEXT, age INT, active BOOL)")?;
 
-    // 2. Insert data using SQL.
-    // We show different ways to insert: standard order, reordered columns, and partial columns (NULLs).
-    println!("Step 2: Inserting data...");
-    db.execute("INSERT INTO users (id, name, age) VALUES (1, 'Alice', 30)")?;
-    db.execute("INSERT INTO users (name, id) VALUES ('Bob', 2)")?; // Order doesn't matter
-    db.execute("INSERT INTO users (id, name) VALUES (3, 'Charlie')")?; // Age will be NULL
-    println!("3 rows inserted.\n");
+    // 2. DML: Insert data
+    println!("Step 2: Inserting records...");
+    db.execute("INSERT INTO users (id, name, age, active) VALUES (1, 'Alice', 30, TRUE)")?;
+    db.execute("INSERT INTO users (id, name, age, active) VALUES (2, 'Bob', 25, TRUE)")?;
+    db.execute("INSERT INTO users (id, name, age, active) VALUES (3, 'Charlie', 40, FALSE)")?;
+    db.execute("INSERT INTO users (id, name, age, active) VALUES (4, 'Dave', 19, TRUE)")?;
+    db.execute("INSERT INTO users (id, name) VALUES (5, 'Eve')")?; // Partial insert (age & active will be NULL)
 
-    // 3. Query the data.
-    // The query method returns a QueryResult containing column names and rows.
-    println!("Step 3: Querying data (SELECT * FROM users):");
-    let result = db.query("SELECT * FROM users")?;
+    println!("Initial state of 'users' table:");
+    let initial_res = db.query("SELECT * FROM users")?;
 
-    // Display the header
-    for col_name in &result.columns {
-        print!("{:<10} ", col_name.to_uppercase());
+    // Manual pretty print logic
+    print_table(&initial_res.columns, &initial_res.rows);
+
+    // 3. UPDATE: Modify data
+    println!("\nStep 3: Updating Alice's age and activating Eve...");
+    db.execute("UPDATE users SET age = 31 WHERE name = 'Alice'")?;
+    db.execute("UPDATE users SET active = TRUE WHERE id = 5")?;
+
+    // 4. DELETE: Remove data
+    println!("Step 4: Deleting inactive users (Charlie)...");
+    db.execute("DELETE FROM users WHERE active = FALSE")?;
+
+    // 5. Advanced Querying: Filtering, Sorting, and Limiting
+    println!("\nStep 5: Executing complex query:");
+    println!("SQL: SELECT name, age FROM users WHERE age > 18 ORDER BY age DESC LIMIT 2");
+
+    let result =
+        db.query("SELECT name, age FROM users WHERE age > 18 ORDER BY age DESC LIMIT 2")?;
+    print_table(&result.columns, &result.rows);
+
+    // 6. Metadata
+    println!("\nStep 6: Database Metadata:");
+    println!("Existing tables: {:?}", db.list_tables());
+
+    println!("\nDemo completed successfully.");
+    Ok(())
+}
+
+/// Helper function included in the demo to print results nicely
+fn print_table(columns: &[String], rows: &[Vec<Value>]) {
+    if rows.is_empty() {
+        println!("(empty set)");
+        return;
     }
-    println!("\n{}", "-".repeat(result.columns.len() * 11));
 
-    // Display the rows
-    for row in result.rows {
+    // Print header
+    for col_name in columns {
+        print!("{:<15} ", col_name.to_uppercase());
+    }
+    println!("\n{}", "-".repeat(columns.len() * 16));
+
+    // Print rows
+    for row in rows {
         for value in row {
             let display = match value {
                 Value::Int(i) => i.to_string(),
-                Value::Float(f) => f.to_string(),
+                Value::Float(f) => format!("{:.2}", f),
                 Value::Text(s) => s.to_string(),
                 Value::Bool(b) => b.to_string().to_uppercase(),
                 Value::Null => "NULL".to_string(),
             };
-            print!("{:<10} ", display);
+            print!("{:<15} ", display);
         }
         println!();
     }
-
-    // 4. List metadata.
-    println!("\nStep 4: Database Metadata:");
-    let tables = db.list_tables();
-    println!("Existing tables: {:?}", tables);
-
-    println!("\nDemo completed successfully.");
-    Ok(())
 }
