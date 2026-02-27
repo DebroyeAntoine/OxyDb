@@ -144,7 +144,6 @@ impl Column {
     ///
     /// Returns `Ok(())` if the index is valid or an `Err(String)` if it is out of bounds
     pub fn remove(&mut self, row_idx: usize) -> Result<(), String> {
-        // TODO Use a deletion vector later
         if self.len() <= row_idx {
             return Err("The row index is too high".into());
         }

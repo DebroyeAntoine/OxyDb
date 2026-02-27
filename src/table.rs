@@ -1,3 +1,5 @@
+use bitvec::prelude::*;
+
 use crate::column::Column;
 use crate::data_type::DataType;
 use crate::value::Value;
@@ -32,6 +34,12 @@ pub struct Table {
     pub columns: Vec<Column>,
     /// The total number of rows currently stored in the table.
     pub row_count: usize,
+    /// The deletion vector.
+    ///
+    /// As we don't want to delete each rows one by one (too big complexcity when arranging
+    /// vectors), we mark in this vector which line have to be deleted, and then the vacuum will
+    /// delete them.
+    pub deletion_vector: BitVec,
 }
 
 impl Table {
@@ -49,6 +57,7 @@ impl Table {
             schema,
             columns,
             row_count: 0,
+            deletion_vector: bitvec!(),
         }
     }
 
@@ -82,6 +91,7 @@ impl Table {
                 ));
             }
             self.columns[i].push(value)?;
+            self.deletion_vector.push(false);
         }
 
         self.row_count += 1;
@@ -93,9 +103,9 @@ impl Table {
     /// Since the database is columnar, this method reconstructs the row by
     /// fetching the value at `row_idx` from every column.
     ///
-    /// Returns `None` if the index is out of bounds.
+    /// Returns `None` if the index is out of bounds or marked as deleted.
     pub fn get_row(&self, row_idx: usize) -> Option<Vec<Value>> {
-        if self.row_count <= row_idx {
+        if self.row_count <= row_idx || self.deletion_vector[row_idx] {
             return None;
         }
         self.columns.iter().map(|col| col.get(row_idx)).collect() // Reconstructs the row as Vec<Value>
@@ -105,10 +115,7 @@ impl Table {
     ///
     /// Returns a result if the remove as failed to catch the error.
     pub fn delete_row(&mut self, row_idx: usize) -> Result<(), String> {
-        self.columns
-            .iter_mut()
-            .try_for_each(|col| col.remove(row_idx))?;
-        self.row_count -= 1;
+        self.deletion_vector.replace(row_idx, true);
         Ok(())
     }
 
@@ -262,8 +269,10 @@ mod tests {
 
         table.delete_row(0).unwrap();
 
-        assert_eq!(table.row_count, 1);
-        let row0 = table.get_row(0).unwrap();
-        assert_eq!(row0, vec![Value::Int(2), Value::Null]);
+        assert_eq!(table.row_count, 2); // due to deletion_vector
+        assert_eq!(table.get_row(0), None);
+        assert!(table.deletion_vector[0]);
+        let row1 = table.get_row(1).unwrap();
+        assert_eq!(row1, vec![Value::Int(2), Value::Null]);
     }
 }

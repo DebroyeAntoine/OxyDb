@@ -1,5 +1,5 @@
 use crate::{
-    ColumnDef, Value,
+    Column, ColumnDef, Value,
     ast::{
         ColumnsSelect, ComparisonOp, Delete, Expr, InsertInto, OrderByClause, SortDirection,
         Statement, Update,
@@ -185,31 +185,29 @@ impl Database {
     where
         F: FnMut(usize, &Vec<Value>) -> T,
     {
-        let all_cols_data: Vec<Vec<Value>> = table
+        let columns: Vec<&Column> = table
             .schema
             .columns
             .iter()
-            .map(|col_def| {
-                let column = table
-                    .get_col(&col_def.name)
-                    .ok_or_else(|| format!("column {:?} does not exist", col_def.name))?;
-
-                let mut data = Vec::with_capacity(column.len());
-                for i in 0..column.len() {
-                    data.push(column.get(i).unwrap_or(Value::Null));
-                }
-                Ok(data)
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-
+            .map(|col_def| table.get_col(&col_def.name).unwrap())
+            .collect();
         // Pivot: transform the data from Column-oriented (Vec of Columns)
         // to Row-oriented (Vec of Rows) for the final result.
-        let row_count = all_cols_data.first().map(|c| c.len()).unwrap_or(0);
+        let row_count = columns[0].len();
         let mut results = Vec::new();
 
         for i in 0..row_count {
-            let full_row: Vec<Value> = all_cols_data.iter().map(|col| col[i].clone()).collect();
+            // Check if the row is marked as deleted.
+            if table.deletion_vector.get(i).as_deref() == Some(&true) {
+                continue;
+            }
 
+            let full_row: Vec<Value> = columns
+                .iter()
+                .map(|col| col.get(i).unwrap_or(Value::Null))
+                .collect();
+
+            // TODO evaluate where before construct all rows.
             let should_include = match where_clause {
                 Some(expr) => self.evaluate_expr(expr, &full_row, &table.schema)?,
                 None => true,
@@ -220,7 +218,6 @@ impl Database {
                 results.push(map_fn(i, &full_row));
             }
         }
-
         Ok(results)
     }
 
