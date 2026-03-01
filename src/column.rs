@@ -1,3 +1,4 @@
+use std::mem::take;
 use std::sync::Arc;
 
 use crate::data_type::DataType;
@@ -165,6 +166,75 @@ impl Column {
         Ok(())
     }
 
+    /// Physically compacts the column by applying a deletion bitmap.
+    ///
+    /// # Parameters
+    /// - `deletion`: A bitmap where a `true` bit indicates that the row
+    ///   at that index must be removed.
+    ///
+    /// # Behavior
+    /// - All rows marked as deleted are permanently removed.
+    /// - The underlying data vector is rebuilt.
+    /// - The `null_bitmap` is compacted accordingly to preserve alignment.
+    ///
+    /// # Requirements
+    /// - `deletion.len()` must match the column length.
+    ///
+    /// # Notes
+    /// This operation is intended to be used during segment compaction
+    /// in a columnar storage engine.
+    pub fn compact(&mut self, deletion: &BitVec) -> Result<(), String> {
+        if self.len() != deletion.len() {
+            return Err(format!(
+                "delete vector {:?} has not the right size",
+                deletion
+            ));
+        }
+        match &mut self.data {
+            ColumnData::Int(col) => {
+                let old = take(col);
+                *col = compact_vec(old, deletion);
+            }
+
+            ColumnData::Text(col) => {
+                let old = take(col);
+                *col = compact_vec(old, deletion);
+            }
+
+            ColumnData::Bool(col) => {
+                let old = take(col);
+
+                let mut new = BitVec::with_capacity(old.len());
+                for (i, bit) in old.into_iter().enumerate() {
+                    if !deletion[i] {
+                        new.push(bit);
+                    }
+                }
+
+                *col = new;
+            }
+
+            ColumnData::Float(col) => {
+                let old = take(col);
+                *col = compact_vec(old, deletion);
+            }
+        }
+
+        // compact null bitmap
+        let old_null = take(&mut self.null_bitmap);
+        let mut new_null = BitVec::with_capacity(old_null.len());
+
+        for (i, bit) in old_null.into_iter().enumerate() {
+            if !deletion[i] {
+                new_null.push(bit);
+            }
+        }
+
+        self.null_bitmap = new_null;
+
+        Ok(())
+    }
+
     /// Replace a value in the column by a new value.
     ///
     /// # Errors
@@ -210,15 +280,27 @@ impl Column {
     }
 }
 
+/// Generic helper used during column compaction.
+///
+/// Consumes the original vector and rebuilds a new one by skipping
+/// elements marked as deleted in the `deletion` bitmap.
+///
+/// # Panics
+/// Panics if `deletion.len()` is smaller than `vec.len()`.
+fn compact_vec<T>(vec: Vec<T>, deletion: &BitVec) -> Vec<T> {
+    vec.into_iter()
+        .zip(deletion.iter().by_vals())
+        .filter(|(_, d)| !d)
+        .map(|(v, _)| v)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data_type::DataType;
     use crate::value::Value;
 
-    // ─────────────────────────────────────────────────────────────
-    // Test 1 : Creation
-    // ─────────────────────────────────────────────────────────────
     #[test]
     fn test_column_new() {
         let col = Column::new("age".into(), DataType::Int);
@@ -236,9 +318,6 @@ mod tests {
         assert_eq!(col.null_bitmap.len(), 0);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Test 2 : Basic Push & Get
-    // ─────────────────────────────────────────────────────────────
     #[test]
     fn test_push_and_get() {
         let mut col = Column::new("test".into(), DataType::Int);
@@ -250,9 +329,6 @@ mod tests {
         assert!(!col.null_bitmap[0]);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Test 3 : NULL
-    // ─────────────────────────────────────────────────────────────
     #[test]
     fn test_null_handling() {
         let mut col = Column::new("nullable".into(), DataType::Int);
@@ -275,9 +351,6 @@ mod tests {
         assert!(!col.null_bitmap[2]);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Test 4 : Type mismatch
-    // ─────────────────────────────────────────────────────────────
     #[test]
     fn test_type_mismatch() {
         let mut col = Column::new("int_col".into(), DataType::Int);
@@ -288,9 +361,6 @@ mod tests {
         assert_eq!(col.len(), 0); // aucune insertion
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Test 5 : Out of bounds
-    // ─────────────────────────────────────────────────────────────
     #[test]
     fn test_out_of_bounds() {
         let col = Column::new("test".into(), DataType::Int);
@@ -300,9 +370,6 @@ mod tests {
         assert_eq!(col.get(100), None);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Test 6: Large Column
-    // ─────────────────────────────────────────────────────────────
     #[test]
     fn test_large_column() {
         let mut col = Column::new("big".into(), DataType::Int);
@@ -316,9 +383,6 @@ mod tests {
         assert_eq!(col.get(9_999), Some(Value::Int(9_999)));
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Test 7 : column full of Null
-    // ─────────────────────────────────────────────────────────────
     #[test]
     fn test_all_nulls() {
         let mut col = Column::new("nulls".into(), DataType::Int);
@@ -335,9 +399,6 @@ mod tests {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Test 8 : remove a value
-    // ─────────────────────────────────────────────────────────────
     #[test]
     fn test_delete() {
         let mut col = Column::new("test".into(), DataType::Int);
@@ -356,9 +417,6 @@ mod tests {
         assert!(col.null_bitmap[1]);
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Test 9 : change a value
-    // ─────────────────────────────────────────────────────────────
     #[test]
     fn test_column_set() {
         let mut col = Column::new("age".into(), DataType::Int);
@@ -379,5 +437,81 @@ mod tests {
         assert!(col.set(0, &Value::Text("hello".into())).is_err());
 
         assert!(col.set(10, &Value::Int(42)).is_err());
+    }
+
+    #[test]
+    fn test_compact_basic() {
+        let mut col = Column::new("test".into(), DataType::Int);
+
+        col.push(Value::Int(1)).unwrap();
+        col.push(Value::Int(2)).unwrap();
+        col.push(Value::Int(3)).unwrap();
+        col.push(Value::Int(4)).unwrap();
+
+        let deletion = bitvec![0, 1, 0, 1];
+
+        col.compact(&deletion).unwrap();
+
+        assert_eq!(col.len(), 2);
+        assert_eq!(col.get(0), Some(Value::Int(1)));
+        assert_eq!(col.get(1), Some(Value::Int(3)));
+    }
+
+    #[test]
+    fn test_compact_with_nulls() {
+        let mut col = Column::new("test".into(), DataType::Int);
+
+        col.push(Value::Int(10)).unwrap();
+        col.push(Value::Null).unwrap();
+        col.push(Value::Int(30)).unwrap();
+        col.push(Value::Null).unwrap();
+
+        let deletion = bitvec![0, 1, 0, 0];
+
+        col.compact(&deletion).unwrap();
+
+        assert_eq!(col.len(), 3);
+
+        assert_eq!(col.get(0), Some(Value::Int(10)));
+        assert_eq!(col.get(1), Some(Value::Int(30)));
+        assert_eq!(col.get(2), Some(Value::Null));
+
+        assert!(!col.null_bitmap[0]);
+        assert!(!col.null_bitmap[1]);
+        assert!(col.null_bitmap[2]);
+    }
+
+    #[test]
+    fn test_compact_text() {
+        let mut col = Column::new("text".into(), DataType::Text);
+
+        col.push(Value::Text(Arc::from("a"))).unwrap();
+        col.push(Value::Text(Arc::from("b"))).unwrap();
+        col.push(Value::Text(Arc::from("c"))).unwrap();
+
+        let deletion = bitvec![1, 0, 0];
+
+        col.compact(&deletion).unwrap();
+
+        assert_eq!(col.len(), 2);
+        assert_eq!(col.get(0), Some(Value::Text(Arc::from("b"))));
+        assert_eq!(col.get(1), Some(Value::Text(Arc::from("c"))));
+    }
+
+    #[test]
+    fn test_compact_bool() {
+        let mut col = Column::new("bool".into(), DataType::Bool);
+
+        col.push(Value::Bool(true)).unwrap();
+        col.push(Value::Bool(false)).unwrap();
+        col.push(Value::Bool(true)).unwrap();
+
+        let deletion = bitvec![0, 1, 0];
+
+        col.compact(&deletion).unwrap();
+
+        assert_eq!(col.len(), 2);
+        assert_eq!(col.get(0), Some(Value::Bool(true)));
+        assert_eq!(col.get(1), Some(Value::Bool(true)));
     }
 }
