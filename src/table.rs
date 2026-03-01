@@ -91,9 +91,9 @@ impl Table {
                 ));
             }
             self.columns[i].push(value)?;
-            self.deletion_vector.push(false);
         }
 
+        self.deletion_vector.push(false);
         self.row_count += 1;
         Ok(())
     }
@@ -131,6 +131,24 @@ impl Table {
     /// Returns `None` if no column with the given name exists in this table.
     pub fn get_col_mut(&mut self, name: &str) -> Option<&mut Column> {
         self.columns.iter_mut().find(|col| col.name == name)
+    }
+
+    pub fn vacuum(&mut self) -> Result<(), String> {
+        if !self.deletion_vector.any() {
+            return Ok(());
+        }
+
+        let new_row_count = self.deletion_vector.count_zeros();
+
+        for column in &mut self.columns {
+            column.compact(&self.deletion_vector)?;
+        }
+
+        self.row_count = new_row_count;
+
+        self.deletion_vector = BitVec::repeat(false, new_row_count);
+
+        Ok(())
     }
 }
 
@@ -274,5 +292,48 @@ mod tests {
         assert!(table.deletion_vector[0]);
         let row1 = table.get_row(1).unwrap();
         assert_eq!(row1, vec![Value::Int(2), Value::Null]);
+    }
+
+    #[test]
+    fn test_table_vacuum() {
+        let schema = Schema {
+            columns: vec![
+                ColumnDef {
+                    name: "id".into(),
+                    data_type: DataType::Int,
+                },
+                ColumnDef {
+                    name: "val".into(),
+                    data_type: DataType::Int,
+                },
+            ],
+        };
+        let mut table = Table::new("test".into(), schema);
+
+        table.insert(vec![Value::Int(1), Value::Int(10)]).unwrap();
+        table.insert(vec![Value::Int(2), Value::Int(20)]).unwrap();
+        table.insert(vec![Value::Int(3), Value::Int(30)]).unwrap();
+        table.insert(vec![Value::Int(4), Value::Int(40)]).unwrap();
+
+        table.delete_row(1).unwrap();
+        table.delete_row(3).unwrap();
+
+        assert_eq!(table.row_count, 4);
+        assert!(table.deletion_vector[1]);
+        println!("{}", table.deletion_vector);
+
+        table.vacuum().unwrap();
+
+        assert_eq!(table.row_count, 2);
+        assert_eq!(table.deletion_vector.len(), 2);
+        assert!(!table.deletion_vector.any());
+
+        let row0 = table.get_row(0).unwrap();
+        assert_eq!(row0[0], Value::Int(1));
+
+        let row1 = table.get_row(1).unwrap();
+        assert_eq!(row1[0], Value::Int(3));
+
+        assert!(table.get_row(2).is_none());
     }
 }
