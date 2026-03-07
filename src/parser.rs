@@ -37,6 +37,7 @@ impl Parser {
             Token::Select => self.parse_select(),
             Token::Delete => self.parse_delete(),
             Token::Update => self.parse_update(),
+            Token::Vacuum => self.parse_vacuum(),
             _ => Err(format!("Unexpected token: {:?}", self.current_token())),
         }?;
 
@@ -484,6 +485,21 @@ impl Parser {
 
         Ok(clauses)
     }
+
+    /// Parses a `VACUUM` statement.
+    ///
+    /// If a string is given, exec the vacuum inside this specific table, else, do it in all
+    /// tables.
+    pub fn parse_vacuum(&mut self) -> Result<Statement, String> {
+        self.consume(Token::Vacuum)?;
+
+        if matches!(self.current_token(), Token::Semicolon | Token::Eof) {
+            Ok(Statement::Vacuum(None))
+        } else {
+            let table = self.consume_ident()?;
+            Ok(Statement::Vacuum(Some(table)))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -749,6 +765,34 @@ mod tests {
                 value: Value::Int(12),
             },
         });
+
+        assert_eq!(statement, expected);
+    }
+
+    #[test]
+    fn test_parse_vacuum_without_table() {
+        let sql = "VACUUM";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        let expected = Statement::Vacuum(None);
+
+        assert_eq!(statement, expected);
+    }
+
+    #[test]
+    fn test_parse_vacuum_with_table() {
+        let sql = "VACUUM users";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        let expected = Statement::Vacuum(Some("users".into()));
 
         assert_eq!(statement, expected);
     }

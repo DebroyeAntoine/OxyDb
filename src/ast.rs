@@ -16,6 +16,9 @@ pub enum Statement {
     Delete(Delete),
     /// An instruction to update data mathcing the query.
     Update(Update),
+    /// An instruction to delete values marked as deleted for a table.
+    /// If no table is given, it will vacuum all tables.
+    Vacuum(Option<String>),
 }
 
 /// Data structure representing a `CREATE TABLE` SQL statement.

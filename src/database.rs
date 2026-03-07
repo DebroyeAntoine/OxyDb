@@ -89,6 +89,7 @@ impl Database {
     /// db.execute("CREATE TABLE users (id INT)").unwrap();
     /// db.execute("INSERT INTO users VALUES (1)").unwrap();
     /// db.execute("DELETE FROM users WHERE id > 12").unwrap();
+    /// db.execute("VACUUM").unwrap();
     ///
     /// let result = db.query("SELECT * FROM users").unwrap();
     /// assert_eq!(result.rows[0][0], Value::Int(1));
@@ -112,6 +113,9 @@ impl Database {
             }
             Statement::Update(update) => {
                 self.update(update)?;
+            }
+            Statement::Vacuum(table) => {
+                self.vacuum(table)?;
             }
             _ => {
                 return Err(format!(
@@ -292,6 +296,62 @@ impl Database {
             }
         }
         Ok(())
+    }
+
+    /// Executes a `VACUUM` operation on one or all tables.
+    ///
+    /// `VACUUM` permanently removes rows that were previously marked as deleted.
+    /// The engine uses a *logical deletion* strategy where rows are first flagged
+    /// in a `deletion_vector` instead of being immediately removed. This avoids
+    /// shifting indices during normal operations such as `DELETE`.
+    ///
+    /// When `VACUUM` is executed:
+    /// - Rows marked as deleted are physically removed from the underlying
+    ///   column storage.
+    /// - Column vectors are compacted to reclaim memory.
+    /// - Row indices are rebuilt accordingly.
+    ///
+    /// # Arguments
+    ///
+    /// * `table` -
+    ///   - `Some(name)` : vacuum only the specified table.
+    ///   - `None` : vacuum every table in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the specified table does not exist.
+    ///
+    /// # Performance
+    ///
+    /// This operation can be expensive for large tables because it requires
+    /// rebuilding column storage structures.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use db::{Database, Value};
+    ///
+    /// let mut db = Database::new();
+    /// db.execute("CREATE TABLE users (id INT, name TEXT)").unwrap();
+    /// db.execute("INSERT INTO users Values(1, 'Alice')").unwrap();
+    /// db.execute("DELETE FROM users WHERE id = 1").unwrap();
+    /// db.execute("VACUUM users").unwrap();
+    /// ```
+    fn vacuum(&mut self, table: Option<String>) -> Result<(), String> {
+        // exec vacuum on selected table
+        if let Some(selected_table) = table {
+            let selected_table = self
+                .get_table_mut(&selected_table)
+                .ok_or_else(|| format!("Table {} is not present in database", selected_table))?;
+            selected_table.vacuum()?;
+            Ok(())
+        } else {
+            // exec vacuum on all tables
+            for table in self.tables.values_mut() {
+                table.vacuum()?;
+            }
+            Ok(())
+        }
     }
 
     /// Executes a `SELECT` query and returns the resulting data set.
@@ -1025,5 +1085,75 @@ mod tests {
 
         let result = db.execute("UPDATE test SET unknown_col = 10 WHERE id = 1");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_vacuum_single_table() {
+        let mut db = Database::new();
+
+        db.execute("CREATE TABLE users (id INT)").unwrap();
+
+        db.execute("INSERT INTO users VALUES (1)").unwrap();
+        db.execute("INSERT INTO users VALUES (2)").unwrap();
+        db.execute("INSERT INTO users VALUES (3)").unwrap();
+
+        db.execute("DELETE FROM users WHERE id = 2").unwrap();
+
+        let before = db.query("SELECT id FROM users ORDER BY id ASC").unwrap();
+        assert_eq!(before.rows.len(), 2);
+
+        db.execute("VACUUM users").unwrap();
+
+        let after = db.query("SELECT id FROM users ORDER BY id ASC").unwrap();
+
+        assert_eq!(after.rows.len(), 2);
+        assert_eq!(after.rows[0][0], Value::Int(1));
+        assert_eq!(after.rows[1][0], Value::Int(3));
+    }
+
+    #[test]
+    fn test_vacuum_all_tables() {
+        let mut db = Database::new();
+
+        db.execute("CREATE TABLE users (id INT)").unwrap();
+        db.execute("CREATE TABLE products (id INT)").unwrap();
+
+        db.execute("INSERT INTO users VALUES (1)").unwrap();
+        db.execute("INSERT INTO users VALUES (2)").unwrap();
+
+        db.execute("INSERT INTO products VALUES (10)").unwrap();
+        db.execute("INSERT INTO products VALUES (20)").unwrap();
+
+        db.execute("DELETE FROM users WHERE id = 1").unwrap();
+        db.execute("DELETE FROM products WHERE id = 20").unwrap();
+
+        db.execute("VACUUM").unwrap();
+
+        let users = db.query("SELECT id FROM users").unwrap();
+        let products = db.query("SELECT id FROM products").unwrap();
+
+        assert_eq!(users.rows.len(), 1);
+        assert_eq!(users.rows[0][0], Value::Int(2));
+
+        assert_eq!(products.rows.len(), 1);
+        assert_eq!(products.rows[0][0], Value::Int(10));
+    }
+
+    #[test]
+    fn test_vacuum_no_deleted_rows() {
+        let mut db = Database::new();
+
+        db.execute("CREATE TABLE test (id INT)").unwrap();
+
+        db.execute("INSERT INTO test VALUES (1)").unwrap();
+        db.execute("INSERT INTO test VALUES (2)").unwrap();
+
+        db.execute("VACUUM test").unwrap();
+
+        let result = db.query("SELECT id FROM test ORDER BY id ASC").unwrap();
+
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::Int(1));
+        assert_eq!(result.rows[1][0], Value::Int(2));
     }
 }

@@ -20,6 +20,7 @@ pub enum Token {
     By,
     Asc,
     Desc,
+    Vacuum,
 
     // --- Data Types ---
     Int,
@@ -217,6 +218,7 @@ impl Tokenizer {
             "ASC" => Ok(Token::Asc),
             "DESC" => Ok(Token::Desc),
             "SET" => Ok(Token::Set),
+            "VACUUM" => Ok(Token::Vacuum),
             _ => Ok(Token::Ident(ident)),
         }
     }
