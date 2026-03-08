@@ -20,13 +20,15 @@ OxyDB is an educational project developed to master the Rust programming languag
     - `CREATE TABLE`: Schema definition with strict typing.
     - `INSERT INTO`: Positional or named column insertion.
     - `UPDATE`: Mass updates with shared memory optimization for strings (`Arc<str>`).
-    - `DELETE`: Filtered row removal with index stability.
-    - `SELECT`: Projection, filtering, and sorting.
+    - `DELETE`: O(1) logical deletion via a deletion vector bitmap. Rows are marked as dead without any memory movement.
+    - `SELECT`: Projection, filtering, and sorting. Dead rows are transparently skipped.
+    - `VACUUM`: Physical compaction that permanently removes dead rows and reclaims memory. Can target a single table (`VACUUM users`) or all tables (`VACUUM`).
 - **Advanced Querying**:
     - **Recursive WHERE clauses**: Supports complex boolean logic (`AND`, `OR`, Comparisons).
     - **ORDER BY**: Multi-column sorting (Ascending/Descending).
     - **LIMIT**: Efficient result set truncation.
 - **Efficient Null Handling**: Uses bit-mapped nullability tracking via the `bitvec` crate for zero-overhead null representation.
+- **Auto-Vacuum**: Configurable automatic compaction triggered after `DELETE` operations based on absolute row count and deletion ratio thresholds.
 
 ## 🏗 Architecture
 
@@ -35,10 +37,44 @@ OxyDB follows a modern database pipeline:
 2. **Parser**: A recursive descent parser that builds an Abstract Syntax Tree (AST).
 3. **Execution Engine**: Orchestrates data movement and applies filtering logic.
 4. **Columnar Storage Layer**: Physical storage using specialized vectors (`Int`, `Float`, `Text`, `Bool`) and null bitmaps.
+5. **Deletion Vector**: A per-table `BitVec` that tracks logically deleted rows, enabling O(1) deletes and deferred physical compaction.
+
+## 🗑️ Deletion Model
+
+OxyDB uses a **two-phase deletion** strategy inspired by modern analytical engines like DuckDB and Delta Lake:
+
+1. **Logical delete (O(1))**: `DELETE` marks rows as dead in a per-table `deletion_vector` bitmap. No data is moved.
+2. **Physical compaction**: `VACUUM` rebuilds column vectors by copying only the live rows, reclaiming memory in a single pass. The work is proportional to the number of *surviving* rows, not the total — compacting a table with 90% dead rows is cheaper than one with 10% dead rows.
+
+This model provides a **×11 improvement** over immediate physical deletion on 10k rows (571µs vs 6.8ms).
+
+### Auto-Vacuum
+
+Auto-vacuum triggers automatically after each `DELETE` when both thresholds are exceeded:
+
+```rust
+db.vacuum_config.min_deleted_rows = 500;  // absolute threshold
+db.vacuum_config.deleted_ratio = 0.25;    // 25% of table must be dead
+db.vacuum_config.enabled = true;          // can be disabled
+```
+
+The overhead of the threshold check when vacuum does not trigger is negligible (<1µs).
+
+## 📊 Performance
+
+Benchmarks run on 10k rows, 4 columns (`INT`, `TEXT`, `INT`, `BOOL`):
+
+| Operation | Time (10k rows) | Complexity | Notes |
+|---|---|---|---|
+| INSERT (SQL pipeline) | ~499 ns/row | O(1) | Includes tokenizer + parser |
+| SELECT with WHERE | 449 µs | O(n) | Direct column reference, no materialization |
+| UPDATE (50% rows) | 605 µs | O(n) | In-place value replacement |
+| DELETE (logical) | 571 µs | O(n) | Bit-set only, no memory movement |
+| DELETE (old physical) | 6.8 ms | O(k·n) | Removed — kept for reference |
+| VACUUM (10% dead) | 333 µs | O(survivors) | Copies 9k rows |
+| VACUUM (90% dead) | 208 µs | O(survivors) | Copies only 1k rows |
 
 ## 🚀 Quick Start
-
-### Usage Example
 
 ```rust
 use db::{Database, Value};
@@ -59,19 +95,30 @@ fn main() -> Result<(), String> {
 
     // Query with sorting and filtering
     let result = db.query("SELECT name, age FROM users WHERE age > 20 ORDER BY age DESC LIMIT 10")?;
-    
+
     for row in result.rows {
         println!("Name: {:?}, Age: {:?}", row[0], row[1]);
     }
 
+    // Reclaim memory from deleted rows
+    db.execute("VACUUM")?;
+
     Ok(())
 }
-## Development
+```
+
+## 🛠 Development
 
 ### Running Tests
 
 ```bash
 cargo test
+```
+
+### Running Benchmarks
+
+```bash
+cargo bench
 ```
 
 ### Generating Documentation
@@ -82,16 +129,14 @@ cargo doc --open
 
 ## Roadmap
 
-- [ ] Joins: Implement Nested Loop Joins for multi-table queries.
-
-- [ ] Aggregations: Add SUM, COUNT, AVG, and MIN/MAX support.
-
-- [ ] Persistence: Implement a Write-Ahead Log (WAL) or snapshotting to disk.
-
-- [ ] Query Optimization: Basic projection pushdown and index-based lookups.
-
-- [ ] In-Memory Indexes: Hash maps or B-Trees for O(1)/O(log n) searches.
-- [ ] **String Interning**: Implement a global string pool to ensure that identical string literals across different `INSERT` statements share a single memory allocation, further reducing memory footprint.
+- [x] **Deletion Vectors**: O(1) logical delete with deferred physical compaction via `VACUUM`.
+- [x] **Auto-Vacuum**: Configurable automatic compaction with ratio and absolute count thresholds.
+- [ ] **String Interning**: Implement a global string pool so identical string literals share a single memory allocation, reducing `Arc` overhead across large datasets.
+- [ ] **Aggregations**: Add `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` support with optional `GROUP BY`.
+- [ ] **In-Memory Indexes**: Hash maps or B-Trees for O(1)/O(log n) lookups, with a query planner to choose between index scan and sequential scan.
+- [ ] **Joins**: Nested Loop Join first, then Hash Join for larger datasets.
+- [ ] **Persistence**: Write-Ahead Log (WAL) for crash recovery, plus columnar snapshot format for full reload on startup.
+- [ ] **Replication**: Master/slave architecture over the network — slaves replicate DDL/DML from master via WAL shipping, with per-table read permissions and the ability to create local-only tables.
 
 ## License
 
