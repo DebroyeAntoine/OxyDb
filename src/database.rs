@@ -1,5 +1,4 @@
 use crate::{
-    Column, ColumnDef, Value,
     ast::{
         ColumnsSelect, ComparisonOp, Delete, Expr, InsertInto, OrderByClause, SortDirection,
         Statement, Update,
@@ -7,6 +6,7 @@ use crate::{
     parser::Parser,
     table::{Schema, Table},
     tokenizer::Tokenizer,
+    Column, ColumnDef, Value,
 };
 use std::{cmp::Ordering, collections::HashMap};
 
@@ -16,6 +16,8 @@ use std::{cmp::Ordering, collections::HashMap};
 pub struct Database {
     /// A map of table names to their respective [Table] structures.
     tables: HashMap<String, Table>,
+    /// Configuration for automatic data compaction.
+    pub vacuum_config: VacuumConfig,
 }
 
 /// Represents the result of a successful `SELECT` query.
@@ -27,11 +29,33 @@ pub struct QueryResult {
     pub rows: Vec<Vec<Value>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct VacuumConfig {
+    /// If false, auto-vacuum will never trigger.
+    pub enabled: bool,
+    /// Minimum number of rows marked as deleted to trigger a vacuum.
+    pub min_deleted_rows: usize,
+    /// Ratio of deleted rows vs total rows (0.0 to 1.0) to trigger a vacuum.
+    /// e.g., 0.2 means vacuum triggers if 20% of the table is deleted.
+    pub deleted_ratio: f64,
+}
+
+impl Default for VacuumConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_deleted_rows: 500,
+            deleted_ratio: 0.25, // 25%
+        }
+    }
+}
+
 impl Database {
     /// Creates a new, empty database instance.
     pub fn new() -> Self {
         Self {
             tables: HashMap::default(),
+            vacuum_config: VacuumConfig::default(),
         }
     }
 
@@ -259,6 +283,9 @@ impl Database {
         for index in rows {
             table.delete_row(index)?;
         }
+
+        // Auto-Vacuum phase (Physical compaction)
+        self.maybe_auto_vacuum(&delete.table)?;
 
         Ok(())
     }
@@ -592,6 +619,20 @@ impl Database {
             )),
         }
     }
+
+    /// Internal helper to check if a table needs vacuuming and execute it.
+    fn maybe_auto_vacuum(&mut self, table_name: &str) -> Result<(), String> {
+        let needs_vacuum = self
+            .tables
+            .get(table_name)
+            .map(|t| t.should_vacuum(&self.vacuum_config))
+            .unwrap_or(false);
+
+        if needs_vacuum {
+            self.vacuum(Some(table_name.to_string()))?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -620,10 +661,9 @@ mod tests {
     fn test_create_and_drop_table() {
         let mut db = Database::new();
 
-        assert!(
-            db.create_table("users".to_string(), simple_schema())
-                .is_ok()
-        );
+        assert!(db
+            .create_table("users".to_string(), simple_schema())
+            .is_ok());
         assert!(db.get_table("users").is_some());
 
         assert!(db.drop_table("users").is_ok());
@@ -634,10 +674,9 @@ mod tests {
     fn test_duplicate_table_error() {
         let mut db = Database::new();
 
-        assert!(
-            db.create_table("users".to_string(), simple_schema())
-                .is_ok()
-        );
+        assert!(db
+            .create_table("users".to_string(), simple_schema())
+            .is_ok());
         let err = db.create_table("users".to_string(), simple_schema());
 
         assert!(err.is_err());
@@ -1155,5 +1194,93 @@ mod tests {
         assert_eq!(result.rows.len(), 2);
         assert_eq!(result.rows[0][0], Value::Int(1));
         assert_eq!(result.rows[1][0], Value::Int(2));
+    }
+
+    #[test]
+    fn test_auto_vacuum_trigger_by_ratio() {
+        let mut db = Database::new();
+        // Set a very aggressive ratio for testing: 20%
+        db.vacuum_config.deleted_ratio = 0.2;
+        db.vacuum_config.min_deleted_rows = 100; // High enough not to interfere
+
+        db.execute("CREATE TABLE test (id INT)").unwrap();
+
+        // Insert 10 rows
+        for i in 0..10 {
+            db.execute(&format!("INSERT INTO test VALUES ({})", i))
+                .unwrap();
+        }
+
+        // Delete 1 row (10%) -> Should NOT trigger vacuum
+        db.execute("DELETE FROM test WHERE id = 0").unwrap();
+        let table = db.get_table("test").unwrap();
+        assert_eq!(
+            table.row_count, 10,
+            "Row count should still be 10 (logical delete only)"
+        );
+        assert_eq!(table.deletion_vector.count_ones(), 1);
+
+        // Delete 2 more rows (Total 3/10 = 30%) -> Should trigger vacuum
+        db.execute("DELETE FROM test WHERE id < 3").unwrap();
+
+        let table = db.get_table("test").unwrap();
+        // After vacuum, row_count is physically updated to 7
+        assert_eq!(table.row_count, 7, "Vacuum should have compacted the table");
+        assert_eq!(
+            table.deletion_vector.count_ones(),
+            0,
+            "No rows should be marked as deleted after vacuum"
+        );
+    }
+
+    #[test]
+    fn test_auto_vacuum_trigger_by_count() {
+        let mut db = Database::new();
+        // Trigger if at least 5 rows are deleted, regardless of ratio
+        db.vacuum_config.min_deleted_rows = 5;
+        db.vacuum_config.deleted_ratio = 0.9; // Very high ratio to test count instead
+
+        db.execute("CREATE TABLE test (id INT)").unwrap();
+        for i in 0..100 {
+            db.execute(&format!("INSERT INTO test VALUES ({})", i))
+                .unwrap();
+        }
+
+        // Delete 5 rows -> Don't trigger count threshold as ratio is very high.
+        db.execute("DELETE FROM test WHERE id < 5").unwrap();
+
+        {
+            let table = db.get_table("test").unwrap();
+            assert_eq!(
+                table.row_count, 100,
+                "Table should have been compacted via count threshold"
+            );
+        }
+
+        db.vacuum_config.deleted_ratio = 0.04;
+        db.execute("DELETE FROM test WHERE id < 6").unwrap();
+        let table = db.get_table("test").unwrap();
+        assert_eq!(
+            table.row_count, 94,
+            "Table should have been compacted via count threshold"
+        );
+    }
+
+    #[test]
+    fn test_auto_vacuum_disabled() {
+        let mut db = Database::new();
+        db.vacuum_config.enabled = false;
+        db.vacuum_config.deleted_ratio = 0.01; // Should trigger every time if enabled
+
+        db.execute("CREATE TABLE test (id INT)").unwrap();
+        db.execute("INSERT INTO test VALUES (1)").unwrap();
+        db.execute("DELETE FROM test WHERE id = 1").unwrap();
+
+        let table = db.get_table("test").unwrap();
+        assert_eq!(
+            table.row_count, 1,
+            "Compaction should not happen when auto-vacuum is disabled"
+        );
+        assert_eq!(table.deletion_vector.count_ones(), 1);
     }
 }

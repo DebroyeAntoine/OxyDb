@@ -2,6 +2,7 @@ use bitvec::prelude::*;
 
 use crate::column::Column;
 use crate::data_type::DataType;
+use crate::database::VacuumConfig;
 use crate::value::Value;
 
 /// Represents the definition of a single column in a table's schema.
@@ -149,6 +150,27 @@ impl Table {
         self.deletion_vector = BitVec::repeat(false, new_row_count);
 
         Ok(())
+    }
+
+    /// Determines if the table needs a vacuum based on the provided configuration.
+    pub fn should_vacuum(&self, config: &VacuumConfig) -> bool {
+        if !config.enabled {
+            return false;
+        }
+
+        let deleted = self.deletion_vector.count_ones();
+        if deleted == 0 {
+            return false;
+        }
+
+        // Even if we have many deleted rows, we only vacuum if they represent
+        // a significant portion of the total table size.
+        if self.row_count > 0 {
+            let ratio = deleted as f64 / self.row_count as f64;
+            return ratio >= config.deleted_ratio;
+        }
+
+        false
     }
 }
 
