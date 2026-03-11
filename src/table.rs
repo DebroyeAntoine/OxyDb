@@ -1,4 +1,7 @@
 use allocative::Allocative;
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use bitvec::prelude::*;
 
 use crate::column::Column;
@@ -43,6 +46,11 @@ pub struct Table {
     /// delete them.
     #[allocative(skip)]
     pub deletion_vector: BitVec,
+    /// String interner to use performance from Arc.
+    ///
+    /// If a string is used in the table, its strong count is as least 2 (one in the hashset and
+    /// one in the table).
+    string_interner: HashSet<Arc<str>>,
 }
 
 impl Table {
@@ -61,6 +69,7 @@ impl Table {
             columns,
             row_count: 0,
             deletion_vector: bitvec!(),
+            string_interner: HashSet::default(),
         }
     }
 
@@ -81,7 +90,7 @@ impl Table {
         }
 
         // Validate types and push values to respective columns
-        for (i, value) in values.into_iter().enumerate() {
+        for (i, mut value) in values.into_iter().enumerate() {
             if value
                 .data_type()
                 .is_some_and(|t| t != self.schema.columns[i].data_type)
@@ -92,6 +101,15 @@ impl Table {
                     value.data_type(),
                     self.schema.columns[i].data_type
                 ));
+            }
+            // if the value is a string check in the hashset if it already exists or not and
+            // increase strong count if yes.
+            if let Value::Text(ref mut s) = value {
+                if let Some(existing_arc) = self.string_interner.get(s) {
+                    *s = Arc::clone(existing_arc);
+                } else {
+                    self.string_interner.insert(Arc::clone(s));
+                }
             }
             self.columns[i].push(value)?;
         }
@@ -151,6 +169,9 @@ impl Table {
 
         self.deletion_vector = BitVec::repeat(false, new_row_count);
 
+        // clean all Arc<str> with strong count to one because they are no more used in the table.
+        self.string_interner
+            .retain(|value| Arc::strong_count(value) > 1);
         Ok(())
     }
 
