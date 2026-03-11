@@ -1,5 +1,5 @@
 use allocative::Allocative;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use bitvec::prelude::*;
@@ -73,6 +73,14 @@ impl Table {
         }
     }
 
+    fn internalize_string(&mut self, s: &mut Arc<str>) {
+        if let Some(existing_arc) = self.string_interner.get(s) {
+            *s = Arc::clone(existing_arc);
+        } else {
+            self.string_interner.insert(Arc::clone(s));
+        }
+    }
+
     /// Appends a new row of values to the table.
     ///
     /// # Errors
@@ -105,11 +113,7 @@ impl Table {
             // if the value is a string check in the hashset if it already exists or not and
             // increase strong count if yes.
             if let Value::Text(ref mut s) = value {
-                if let Some(existing_arc) = self.string_interner.get(s) {
-                    *s = Arc::clone(existing_arc);
-                } else {
-                    self.string_interner.insert(Arc::clone(s));
-                }
+                self.internalize_string(s);
             }
             self.columns[i].push(value)?;
         }
@@ -150,7 +154,7 @@ impl Table {
     /// Finds and returns a mutable reference to a specific column by its name.
     ///
     /// Returns `None` if no column with the given name exists in this table.
-    pub fn get_col_mut(&mut self, name: &str) -> Option<&mut Column> {
+    fn get_col_mut(&mut self, name: &str) -> Option<&mut Column> {
         self.columns.iter_mut().find(|col| col.name == name)
     }
 
@@ -172,6 +176,26 @@ impl Table {
         // clean all Arc<str> with strong count to one because they are no more used in the table.
         self.string_interner
             .retain(|value| Arc::strong_count(value) > 1);
+        Ok(())
+    }
+
+    /// Do an update of values at each row_idx wanted.
+    pub fn update(
+        &mut self,
+        rows_idx: &[usize],
+        values: HashMap<String, Value>,
+    ) -> Result<(), String> {
+        for (col, mut value) in values {
+            if let Value::Text(ref mut s) = value {
+                self.internalize_string(s);
+            }
+            let column = self
+                .get_col_mut(&col)
+                .ok_or_else(|| format!("column {:?} is not a column from this table", col))?;
+            for row in rows_idx {
+                column.set(*row, &value)?;
+            }
+        }
         Ok(())
     }
 

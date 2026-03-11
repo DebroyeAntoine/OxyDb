@@ -315,15 +315,7 @@ impl Database {
         let table = self
             .get_table_mut(&update.table)
             .ok_or_else(|| format!("table {:?} does not exist", update.table))?;
-        let mut rows = rows_to_update;
-        for (col, value) in update.assignments {
-            let column = table
-                .get_col_mut(&col)
-                .ok_or_else(|| format!("column {:?} is not a column from this table", col))?;
-            for row in &mut rows {
-                column.set(*row, &value)?;
-            }
-        }
+        table.update(&rows_to_update, update.assignments)?;
         Ok(())
     }
 
