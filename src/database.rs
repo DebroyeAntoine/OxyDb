@@ -10,7 +10,7 @@ use crate::{
     table::{Schema, Table},
     tokenizer::Tokenizer,
 };
-use std::{cmp::Ordering, collections::HashMap};
+use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 /// The main entry point for the in-memory database engine.
 /// It manages a collection of tables and orchestrates query execution.
@@ -601,7 +601,12 @@ impl Database {
             }
 
             // Text comparisons
-            (Value::Text(l), ComparisonOp::Eq, Value::Text(r)) => Ok(l == r),
+            (Value::Text(l), ComparisonOp::Eq, Value::Text(r)) => {
+                if Arc::ptr_eq(l, r) {
+                    return Ok(true);
+                }
+                Ok(l == r)
+            }
 
             // Bool comparisons
             (Value::Bool(l), ComparisonOp::Eq, Value::Bool(r)) => Ok(l == r),
