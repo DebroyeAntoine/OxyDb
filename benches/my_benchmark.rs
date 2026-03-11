@@ -23,6 +23,23 @@ fn setup_populated_db(n: usize) -> Database {
     db
 }
 
+fn setup_categorized_db(n: usize, num_categories: usize) -> Database {
+    let mut db = Database::new();
+    db.execute("CREATE TABLE products (id INT, category TEXT)")
+        .unwrap();
+    let table = db.get_table_mut("products").unwrap();
+
+    for i in 0..n {
+        let cat_name = format!("category{}", i % num_categories);
+        let row = vec![
+            Value::Int(i as i64),
+            Value::Text(Arc::from(cat_name.as_str())),
+        ];
+        table.insert(row).unwrap();
+    }
+    db
+}
+
 // --- Benchmarks ---
 
 fn bench_delete_logical(c: &mut Criterion) {
@@ -145,6 +162,24 @@ fn bench_update_performance(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_string_update_performance(c: &mut Criterion) {
+    let mut group = c.benchmark_group("String_Update_Performance");
+
+    for n in [1000, 10000].iter() {
+        group.bench_with_input(BenchmarkId::from_parameter(n), n, |b, &n| {
+            b.iter_with_setup(
+                || setup_populated_db(n),
+                |mut db| {
+                    db.execute("UPDATE users SET name = 'StandardName' WHERE active = TRUE")
+                        .unwrap();
+                    black_box(db);
+                },
+            );
+        });
+    }
+    group.finish();
+}
+
 fn bench_insert_sql(c: &mut Criterion) {
     let mut group = c.benchmark_group("Insert_SQL_Pipeline");
     group.bench_function("insert_single_row_sql", |b| {
@@ -158,6 +193,22 @@ fn bench_insert_sql(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_select_string_interned(c: &mut Criterion) {
+    let n = 10000;
+    let db = setup_categorized_db(n, 5);
+
+    let mut group = c.benchmark_group("Select_String_Equality");
+    group.bench_function("filter_on_interned_string", |b| {
+        b.iter(|| {
+            let res = db
+                .query("SELECT * FROM products WHERE category = 'category2'")
+                .unwrap();
+            black_box(res);
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_delete_logical,
@@ -165,6 +216,8 @@ criterion_group!(
     bench_auto_vacuum_overhead,
     bench_select_scaling,
     bench_update_performance,
-    bench_insert_sql
+    bench_insert_sql,
+    bench_select_string_interned,
+    bench_string_update_performance,
 );
 criterion_main!(benches);
