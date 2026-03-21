@@ -219,6 +219,11 @@ impl Table {
 
         false
     }
+
+    /// Check if a string is already in the string_interner and get its Arc.
+    pub fn lookup_string(&self, s: &str) -> Option<Arc<str>> {
+        self.string_interner.get(s).cloned()
+    }
 }
 
 #[cfg(test)]

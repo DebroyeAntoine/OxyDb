@@ -264,7 +264,13 @@ impl Database {
     /// # Errors
     /// Returns an error if the table is not found or if the `WHERE` clause contains
     /// invalid column names or type mismatches.
-    fn delete(&mut self, delete: Delete) -> Result<(), String> {
+    fn delete(&mut self, mut delete: Delete) -> Result<(), String> {
+        self.bind_expression(
+            &mut delete.where_clause,
+            self.get_table(&delete.table)
+                .ok_or_else(|| format!("table {:?} does not exist", delete.table))?,
+        );
+
         let rows_to_delete = {
             let table = self
                 .get_table(&delete.table)
@@ -305,7 +311,13 @@ impl Database {
     /// - One of the target columns does not exist.
     /// - The provided value's type does not match the column's data type.
     /// - The `WHERE` clause evaluation fails.
-    fn update(&mut self, update: Update) -> Result<(), String> {
+    fn update(&mut self, mut update: Update) -> Result<(), String> {
+        self.bind_expression(
+            &mut update.where_clause,
+            self.get_table(&update.table)
+                .ok_or_else(|| format!("table {:?} does not exist", update.table))?,
+        );
+
         let rows_to_update = {
             let table = self
                 .get_table(&update.table)
@@ -421,13 +433,17 @@ impl Database {
             ));
         }
 
-        let Statement::Select(select) = statement else {
+        let Statement::Select(mut select) = statement else {
             unreachable!()
         };
 
         let table = self
             .get_table(&select.table)
             .ok_or_else(|| format!("table {:?} does not exist", select.table))?;
+
+        if let Some(ref mut expr) = select.where_clause {
+            self.bind_expression(expr, table);
+        }
 
         // Resolve which columns need to be projected
         let selected_cols = match select.columns {
@@ -471,6 +487,24 @@ impl Database {
             columns: selected_cols,
             rows: final_rows,
         })
+    }
+
+    /// Prepare expression to be optimized by the string interner of the selected table
+    fn bind_expression(&self, expr: &mut Expr, table: &Table) {
+        match expr {
+            Expr::Comparison { value, .. } => {
+                //check if the value is a Text and try to internalize it.
+                if let Value::Text(s) = value
+                    && let Some(interned) = table.lookup_string(s)
+                {
+                    *s = interned;
+                }
+            }
+            Expr::And { left, right } | Expr::Or { left, right } => {
+                self.bind_expression(left, table);
+                self.bind_expression(right, table);
+            }
+        }
     }
 
     /// Sorts the provided rows in-place based on the SQL `ORDER BY` clauses.
