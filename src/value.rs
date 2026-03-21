@@ -1,13 +1,15 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use allocative::Allocative;
+
 use crate::data_type::DataType;
 
 /// Represents a single data value stored in the database.
 ///
 /// This enum wraps all supported Rust types into a single type that can be
 /// passed around the engine. It includes support for SQL `NULL` values.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Allocative)]
 pub enum Value {
     /// represents an empty or missing value.
     Null,

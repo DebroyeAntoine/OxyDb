@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
+use allocative::Allocative;
+
 use crate::{ColumnDef, Value};
 
 /// Represents the top-level SQL statements supported by the database.
 /// This enum is the entry point of the Abstract Syntax Tree (AST).
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Allocative)]
 pub enum Statement {
     /// An instruction to create a new table schema.
     CreateTable(CreateTable),
@@ -23,7 +25,7 @@ pub enum Statement {
 
 /// Data structure representing a `CREATE TABLE` SQL statement.
 /// It defines the table's identity and the structure of its columns.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Allocative)]
 pub struct CreateTable {
     /// The unique name of the table to be created.
     pub name: String,
@@ -33,7 +35,7 @@ pub struct CreateTable {
 
 /// Data structure representing an `INSERT INTO` SQL statement.
 /// Used to populate a table with new data.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Allocative)]
 pub struct InsertInto {
     /// The name of the target table where data will be inserted.
     pub table: String,
@@ -45,7 +47,7 @@ pub struct InsertInto {
 }
 
 /// Defines which columns should be retrieved in a `SELECT` query.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Allocative)]
 pub enum ColumnsSelect {
     /// Represents the `*` wildcard, indicating all columns should be returned.
     Star,
@@ -55,7 +57,7 @@ pub enum ColumnsSelect {
 
 /// Data structure representing a `SELECT` SQL statement.
 /// Used to define what data to fetch and from which source.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Allocative)]
 pub struct Select {
     /// The projection of the query (which columns to include in the result).
     pub columns: ColumnsSelect,
@@ -74,7 +76,7 @@ pub struct Select {
 
 /// Data structure representing a `DELETE` SQL statement.
 /// Used to define which rows to be deleted in a specific table
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Allocative)]
 pub struct Delete {
     /// The name of the table to query data from.
     pub table: String,
@@ -84,7 +86,7 @@ pub struct Delete {
 }
 
 /// Represents a boolean comparison operation between a column and a literal value.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Allocative)]
 pub enum ComparisonOp {
     /// Greater than (`>`)
     Gt,
@@ -101,7 +103,7 @@ pub enum ComparisonOp {
 /// ORDER BY age ASC        -- Single clause
 /// ORDER BY age DESC, name ASC  -- Multiple clauses (age first, then name)
 /// ```
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Allocative)]
 pub struct OrderByClause {
     /// The name of the column to sort by.
     pub column: String,
@@ -111,7 +113,7 @@ pub struct OrderByClause {
 }
 
 /// Defines the direction of sorting for an `ORDER BY` clause.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Allocative)]
 pub enum SortDirection {
     /// Sort in ascending order (smallest to largest, A-Z).
     /// This is the SQL default if no direction is specified.
@@ -122,7 +124,7 @@ pub enum SortDirection {
 }
 
 /// A recursive expression tree used in `WHERE` clauses to filter rows.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Allocative)]
 pub enum Expr {
     /// A leaf node: compares a specific column to a constant value.
     Comparison {
@@ -141,7 +143,7 @@ pub enum Expr {
 
 /// Data structure representing an `UPDATE` SQL statement.
 /// Used to modify existing rows in a table.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Allocative)]
 pub struct Update {
     /// The name of the table to update.
     pub table: String,

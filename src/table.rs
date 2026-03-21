@@ -1,3 +1,4 @@
+use allocative::Allocative;
 use bitvec::prelude::*;
 
 use crate::column::Column;
@@ -6,7 +7,7 @@ use crate::database::VacuumConfig;
 use crate::value::Value;
 
 /// Represents the definition of a single column in a table's schema.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Allocative)]
 pub struct ColumnDef {
     /// The name of the column.
     pub name: String,
@@ -15,7 +16,7 @@ pub struct ColumnDef {
 }
 
 /// Defines the structure of a table, consisting of an ordered list of column definitions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Allocative)]
 pub struct Schema {
     /// The ordered collection of column definitions.
     pub columns: Vec<ColumnDef>,
@@ -25,7 +26,7 @@ pub struct Schema {
 ///
 /// Data is stored in a columnar format (one [Column] per schema field) to improve
 /// memory locality and performance for analytical queries.
-#[derive(Debug)]
+#[derive(Debug, Allocative)]
 pub struct Table {
     /// The unique name of the table.
     pub name: String,
@@ -40,6 +41,7 @@ pub struct Table {
     /// As we don't want to delete each rows one by one (too big complexcity when arranging
     /// vectors), we mark in this vector which line have to be deleted, and then the vacuum will
     /// delete them.
+    #[allocative(skip)]
     pub deletion_vector: BitVec,
 }
 

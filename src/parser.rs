@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use allocative::Allocative;
+
 use crate::tokenizer::Token;
 use crate::{ColumnDef, DataType, Value, ast::*};
 
 /// A recursive descent parser that transforms a sequence of [Token]s
 /// into an Abstract Syntax Tree (AST) represented by a [Statement].
+#[derive(Allocative)]
 pub struct Parser {
     /// The stream of tokens produced by the Tokenizer.
     tokens: Vec<Token>,

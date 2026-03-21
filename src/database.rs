@@ -1,3 +1,5 @@
+use allocative::Allocative;
+
 use crate::{
     Column, ColumnDef, Value,
     ast::{
@@ -12,7 +14,7 @@ use std::{cmp::Ordering, collections::HashMap};
 
 /// The main entry point for the in-memory database engine.
 /// It manages a collection of tables and orchestrates query execution.
-#[derive(Default)]
+#[derive(Default, Allocative)]
 pub struct Database {
     /// A map of table names to their respective [Table] structures.
     tables: HashMap<String, Table>,
@@ -21,7 +23,7 @@ pub struct Database {
 }
 
 /// Represents the result of a successful `SELECT` query.
-#[derive(Debug)]
+#[derive(Debug, Allocative)]
 pub struct QueryResult {
     /// The names of the columns included in the result set.
     pub columns: Vec<String>,
@@ -29,7 +31,7 @@ pub struct QueryResult {
     pub rows: Vec<Vec<Value>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Allocative)]
 pub struct VacuumConfig {
     /// If false, auto-vacuum will never trigger.
     pub enabled: bool,

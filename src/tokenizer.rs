@@ -1,5 +1,7 @@
+use allocative::Allocative;
+
 /// Represents the smallest meaningful units (atoms) of the SQL language.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Allocative)]
 pub enum Token {
     // --- SQL Keywords ---
     Create,

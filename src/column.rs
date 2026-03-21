@@ -3,12 +3,13 @@ use std::sync::Arc;
 
 use crate::data_type::DataType;
 use crate::value::Value;
+use allocative::Allocative;
 use bitvec::prelude::*;
 
 /// Physical storage for column data.
 /// Each variant wraps a collection of a specific type to ensure contiguous memory
 /// allocation (columnar storage).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Allocative)]
 pub enum ColumnData {
     /// Vector of 64-bit integers.
     Int(Vec<i64>),
@@ -17,12 +18,13 @@ pub enum ColumnData {
     /// Vector of thread-safe atomic reference-counted strings.
     Text(Vec<Arc<str>>),
     /// Compact bit-vector for boolean values.
+    #[allocative(skip)] // As bitvec is non significant
     Bool(BitVec),
 }
 
 /// Represents a column within a table.
 /// It combines metadata (name, type) with actual data and a nullability tracker.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Allocative)]
 pub struct Column {
     /// The name of the column.
     pub name: String,
@@ -31,6 +33,7 @@ pub struct Column {
     /// The actual values stored in the column.
     pub data: ColumnData,
     /// A bitmap where a `true` bit indicates that the value at that index is `NULL`.
+    #[allocative(skip)]
     pub null_bitmap: BitVec,
 }
 
