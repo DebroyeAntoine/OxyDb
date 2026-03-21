@@ -635,12 +635,7 @@ impl Database {
             }
 
             // Text comparisons
-            (Value::Text(l), ComparisonOp::Eq, Value::Text(r)) => {
-                if Arc::ptr_eq(l, r) {
-                    return Ok(true);
-                }
-                Ok(l == r)
-            }
+            (Value::Text(l), ComparisonOp::Eq, Value::Text(r)) => Ok(Arc::ptr_eq(l, r)),
 
             // Bool comparisons
             (Value::Bool(l), ComparisonOp::Eq, Value::Bool(r)) => Ok(l == r),

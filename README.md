@@ -74,6 +74,8 @@ Benchmarks run on 10k rows, 4 columns (`INT`, `TEXT`, `INT`, `BOOL`):
 | VACUUM (10% dead) | 333 µs | O(survivors) | Copies 9k rows |
 | VACUUM (90% dead) | 208 µs | O(survivors) | Copies only 1k rows |
 
+Memory benchmark on 100k rows, 2 columns (`INT`, `TEXT`), 5 distinct string values: **3MB heap** thanks to string interning (vs ~10MB without).
+
 ## 🚀 Quick Start
 
 ```rust
@@ -121,6 +123,12 @@ cargo test
 cargo bench
 ```
 
+### Running heap Benchmarks
+```bash
+cargo run --example mem_check
+```
+And open the generated file in speedscope to see the flamegraph
+
 ### Generating Documentation
 
 ```bash
@@ -131,7 +139,7 @@ cargo doc --open
 
 - [x] **Deletion Vectors**: O(1) logical delete with deferred physical compaction via `VACUUM`.
 - [x] **Auto-Vacuum**: Configurable automatic compaction with ratio and absolute count thresholds.
-- [ ] **String Interning**: Implement a global string pool so identical string literals share a single memory allocation, reducing `Arc` overhead across large datasets.
+- [x] **String Interning**: Implement a global string pool so identical string literals share a single memory allocation, reducing `Arc` overhead across large datasets.
 - [ ] **Aggregations**: Add `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` support with optional `GROUP BY`.
 - [ ] **In-Memory Indexes**: Hash maps or B-Trees for O(1)/O(log n) lookups, with a query planner to choose between index scan and sequential scan.
 - [ ] **Joins**: Nested Loop Join first, then Hash Join for larger datasets.
