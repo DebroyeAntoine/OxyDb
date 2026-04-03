@@ -260,14 +260,12 @@ impl Parser {
             Token::Ident(_) => {
                 let col = self.consume_ident()?;
                 self.consume(Token::RightParen)?;
-                Ok(SelectItem::Aggregate(Aggregate::Count(col.into())))
+                Ok(SelectItem::Aggregate(Aggregate::Count(col)))
             }
-            _ => {
-                return Err(format!(
-                    "Token {:?} not allowed in a COUNT",
-                    self.current_token()
-                ));
-            }
+            _ => Err(format!(
+                "Token {:?} not allowed in a COUNT",
+                self.current_token()
+            )),
         }
     }
 

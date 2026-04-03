@@ -486,10 +486,10 @@ impl Database {
 
         // If the SELECT contains aggregates, delegate entirely to compute_aggregates.
         // ORDER BY and LIMIT do not apply to a single-row aggregate result.
-        if let ColumnsSelect::Items(ref items) = select.columns {
-            if items.iter().any(|i| matches!(i, SelectItem::Aggregate(_))) {
-                return self.compute_aggregates(items, &filtered_rows, &table.schema);
-            }
+        if let ColumnsSelect::Items(ref items) = select.columns
+            && items.iter().any(|i| matches!(i, SelectItem::Aggregate(_)))
+        {
+            return self.compute_aggregates(items, &filtered_rows, &table.schema);
         }
 
         // Plain column projection path.
