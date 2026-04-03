@@ -1,10 +1,10 @@
 use allocative::Allocative;
 
 use crate::{
-    Column, ColumnDef, Value,
+    Column, ColumnDef, DataType, Value,
     ast::{
-        ColumnsSelect, ComparisonOp, Delete, Expr, InsertInto, OrderByClause, SortDirection,
-        Statement, Update,
+        Aggregate, ColumnsSelect, ComparisonOp, Delete, Expr, InsertInto, OrderByClause,
+        SelectItem, SortDirection, Statement, Update,
     },
     parser::Parser,
     table::{Schema, Table},
@@ -50,6 +50,42 @@ impl Default for VacuumConfig {
             deleted_ratio: 0.25, // 25%
         }
     }
+}
+
+/// Extracts all non-null Int values from a column, by row index.
+/// Returns an owned Vec so no lifetime annotation is needed.
+fn collect_int_col(rows: &[Vec<Value>], idx: usize) -> Vec<i64> {
+    rows.iter()
+        .filter_map(|row| match row[idx] {
+            Value::Int(v) => Some(v),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Extracts all non-null numeric values from a column as f64, by row index.
+/// Returns an owned Vec.
+fn collect_float_col(rows: &[Vec<Value>], idx: usize) -> Vec<f64> {
+    rows.iter()
+        .filter_map(|row| match row[idx] {
+            Value::Float(v) => Some(v),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Validates that a column exists and is numeric (Int or Float).
+/// Returns the column index and its DataType.
+fn validate_numeric_col(schema: &Schema, col: &str) -> Result<(usize, DataType), String> {
+    let column = schema
+        .columns
+        .iter()
+        .find(|c| c.name == col)
+        .ok_or_else(|| format!("Column {} does not exist", col))?;
+    if matches!(column.data_type, DataType::Text | DataType::Bool) {
+        return Err(format!("Column {} is not numeric", col));
+    }
+    Ok((schema.index_of(col)?, column.data_type))
 }
 
 impl Database {
@@ -237,7 +273,7 @@ impl Database {
                 .map(|col| col.get(i).unwrap_or(Value::Null))
                 .collect();
 
-            // TODO evaluate where before construct all rows.
+            // TODO: evaluate where before construct all rows.
             let should_include = match where_clause {
                 Some(expr) => self.evaluate_expr(expr, &full_row, &table.schema)?,
                 None => true,
@@ -445,19 +481,33 @@ impl Database {
             self.bind_expression(expr, table);
         }
 
-        // Resolve which columns need to be projected
-        let selected_cols = match select.columns {
+        let mut filtered_rows =
+            self.filter_rows(table, select.where_clause.as_ref(), |_, row| row.clone())?;
+
+        // If the SELECT contains aggregates, delegate entirely to compute_aggregates.
+        // ORDER BY and LIMIT do not apply to a single-row aggregate result.
+        if let ColumnsSelect::Items(ref items) = select.columns {
+            if items.iter().any(|i| matches!(i, SelectItem::Aggregate(_))) {
+                return self.compute_aggregates(items, &filtered_rows, &table.schema);
+            }
+        }
+
+        // Plain column projection path.
+        let selected_cols: Vec<String> = match select.columns {
             ColumnsSelect::Star => table
                 .schema
                 .columns
                 .iter()
                 .map(|col| col.name.clone())
                 .collect(),
-            ColumnsSelect::ColumnsNames(cols) => cols,
+            ColumnsSelect::Items(items) => items
+                .into_iter()
+                .map(|item| match item {
+                    SelectItem::Column(name) => Ok(name),
+                    SelectItem::Aggregate(_) => unreachable!(),
+                })
+                .collect::<Result<Vec<_>, String>>()?,
         };
-
-        let mut filtered_rows =
-            self.filter_rows(table, select.where_clause.as_ref(), |_, row| row.clone())?;
 
         if let Some(order_by) = select.order_by.filter(|o| !o.is_empty()) {
             self.sort(&mut filtered_rows, &table.schema.columns, order_by)?;
@@ -486,6 +536,116 @@ impl Database {
         Ok(QueryResult {
             columns: selected_cols,
             rows: final_rows,
+        })
+    }
+
+    fn compute_aggregates(
+        &self,
+        items: &[SelectItem],
+        rows: &[Vec<Value>],
+        schema: &Schema,
+    ) -> Result<QueryResult, String> {
+        let mut cols: Vec<String> = Vec::with_capacity(items.len());
+        let mut result_row: Vec<Value> = Vec::with_capacity(items.len());
+
+        for item in items {
+            let SelectItem::Aggregate(aggr) = item else {
+                return Err("Non-aggregate item passed to compute_aggregates".into());
+            };
+
+            match aggr {
+                Aggregate::CountStar => {
+                    cols.push("COUNT(*)".into());
+                    result_row.push(Value::Int(rows.len() as i64));
+                }
+
+                Aggregate::Count(col) => {
+                    let idx = schema.index_of(col)?;
+                    cols.push(format!("COUNT({})", col));
+                    let count = rows.iter().filter(|row| !row[idx].is_null()).count() as i64;
+                    result_row.push(Value::Int(count));
+                }
+
+                Aggregate::Sum(col) => {
+                    let (idx, dtype) = validate_numeric_col(schema, col)?;
+                    cols.push(format!("SUM({})", col));
+                    let val = match dtype {
+                        DataType::Int => {
+                            let sum: i64 = collect_int_col(rows, idx).into_iter().sum();
+                            Value::Int(sum)
+                        }
+                        DataType::Float => {
+                            let sum: f64 = collect_float_col(rows, idx).into_iter().sum();
+                            Value::Float(sum)
+                        }
+                        _ => unreachable!(),
+                    };
+                    result_row.push(val);
+                }
+
+                Aggregate::Min(col) => {
+                    let (idx, dtype) = validate_numeric_col(schema, col)?;
+                    cols.push(format!("MIN({})", col));
+                    let val = match dtype {
+                        DataType::Int => collect_int_col(rows, idx)
+                            .into_iter()
+                            .min()
+                            .map(Value::Int)
+                            .unwrap_or(Value::Null),
+                        DataType::Float => collect_float_col(rows, idx)
+                            .into_iter()
+                            .min_by(|a, b| a.partial_cmp(b).unwrap())
+                            .map(Value::Float)
+                            .unwrap_or(Value::Null),
+                        _ => unreachable!(),
+                    };
+                    result_row.push(val);
+                }
+
+                Aggregate::Max(col) => {
+                    let (idx, dtype) = validate_numeric_col(schema, col)?;
+                    cols.push(format!("MAX({})", col));
+                    let val = match dtype {
+                        DataType::Int => collect_int_col(rows, idx)
+                            .into_iter()
+                            .max()
+                            .map(Value::Int)
+                            .unwrap_or(Value::Null),
+                        DataType::Float => collect_float_col(rows, idx)
+                            .into_iter()
+                            .max_by(|a, b| a.partial_cmp(b).unwrap())
+                            .map(Value::Float)
+                            .unwrap_or(Value::Null),
+                        _ => unreachable!(),
+                    };
+                    result_row.push(val);
+                }
+
+                Aggregate::Avg(col) => {
+                    let (idx, dtype) = validate_numeric_col(schema, col)?;
+                    cols.push(format!("AVG({})", col));
+                    // AVG always returns Float (or NULL if no rows).
+                    let vals = match dtype {
+                        DataType::Int => collect_int_col(rows, idx)
+                            .into_iter()
+                            .map(|v| v as f64)
+                            .collect::<Vec<f64>>(),
+                        DataType::Float => collect_float_col(rows, idx),
+                        _ => unreachable!(),
+                    };
+                    let val = if vals.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::Float(vals.iter().sum::<f64>() / vals.len() as f64)
+                    };
+                    result_row.push(val);
+                }
+            }
+        }
+
+        Ok(QueryResult {
+            columns: cols,
+            rows: vec![result_row],
         })
     }
 
@@ -1312,5 +1472,167 @@ mod tests {
             "Compaction should not happen when auto-vacuum is disabled"
         );
         assert_eq!(table.deletion_vector.count_ones(), 1);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Aggregation tests
+    // ─────────────────────────────────────────────────────────────
+
+    fn setup_employees() -> Database {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE employees (name TEXT, salary INT, bonus FLOAT)")
+            .unwrap();
+        db.execute("INSERT INTO employees VALUES ('Alice', 3000, 500.0)")
+            .unwrap();
+        db.execute("INSERT INTO employees VALUES ('Bob', 4000, 750.5)")
+            .unwrap();
+        db.execute("INSERT INTO employees VALUES ('Carol', 2000, 250.0)")
+            .unwrap();
+        db
+    }
+
+    #[test]
+    fn test_count_star() {
+        let db = setup_employees();
+        let res = db.query("SELECT COUNT(*) FROM employees").unwrap();
+        assert_eq!(res.columns, vec!["COUNT(*)"]);
+        assert_eq!(res.rows.len(), 1);
+        assert_eq!(res.rows[0][0], Value::Int(3));
+    }
+
+    #[test]
+    fn test_count_col_skips_nulls() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE t (id INT, val INT)").unwrap();
+        db.execute("INSERT INTO t (id) VALUES (1)").unwrap(); // val = NULL
+        db.execute("INSERT INTO t VALUES (2, 10)").unwrap();
+        db.execute("INSERT INTO t VALUES (3, 20)").unwrap();
+
+        let res = db.query("SELECT COUNT(val) FROM t").unwrap();
+        assert_eq!(res.columns, vec!["COUNT(val)"]);
+        assert_eq!(res.rows[0][0], Value::Int(2));
+    }
+
+    #[test]
+    fn test_sum_int() {
+        let db = setup_employees();
+        let res = db.query("SELECT SUM(salary) FROM employees").unwrap();
+        assert_eq!(res.columns, vec!["SUM(salary)"]);
+        assert_eq!(res.rows[0][0], Value::Int(9000));
+    }
+
+    #[test]
+    fn test_sum_float() {
+        let db = setup_employees();
+        let res = db.query("SELECT SUM(bonus) FROM employees").unwrap();
+        assert_eq!(res.columns, vec!["SUM(bonus)"]);
+        assert_eq!(res.rows[0][0], Value::Float(1500.5));
+    }
+
+    #[test]
+    fn test_min_int() {
+        let db = setup_employees();
+        let res = db.query("SELECT MIN(salary) FROM employees").unwrap();
+        assert_eq!(res.columns, vec!["MIN(salary)"]);
+        assert_eq!(res.rows[0][0], Value::Int(2000));
+    }
+
+    #[test]
+    fn test_min_float() {
+        let db = setup_employees();
+        let res = db.query("SELECT MIN(bonus) FROM employees").unwrap();
+        assert_eq!(res.columns, vec!["MIN(bonus)"]);
+        assert_eq!(res.rows[0][0], Value::Float(250.0));
+    }
+
+    #[test]
+    fn test_max_int() {
+        let db = setup_employees();
+        let res = db.query("SELECT MAX(salary) FROM employees").unwrap();
+        assert_eq!(res.columns, vec!["MAX(salary)"]);
+        assert_eq!(res.rows[0][0], Value::Int(4000));
+    }
+
+    #[test]
+    fn test_max_float() {
+        let db = setup_employees();
+        let res = db.query("SELECT MAX(bonus) FROM employees").unwrap();
+        assert_eq!(res.columns, vec!["MAX(bonus)"]);
+        assert_eq!(res.rows[0][0], Value::Float(750.5));
+    }
+
+    #[test]
+    fn test_avg_int_returns_float() {
+        let db = setup_employees();
+        let res = db.query("SELECT AVG(salary) FROM employees").unwrap();
+        assert_eq!(res.columns, vec!["AVG(salary)"]);
+        assert_eq!(res.rows[0][0], Value::Float(3000.0));
+    }
+
+    #[test]
+    fn test_avg_float() {
+        let db = setup_employees();
+        let res = db.query("SELECT AVG(bonus) FROM employees").unwrap();
+        assert_eq!(res.columns, vec!["AVG(bonus)"]);
+        // (500.0 + 750.5 + 250.0) / 3 = 500.1666...
+        if let Value::Float(v) = res.rows[0][0] {
+            assert!((v - 500.1666).abs() < 0.001);
+        } else {
+            panic!("Expected Float");
+        }
+    }
+
+    #[test]
+    fn test_multiple_aggregates_in_one_query() {
+        let db = setup_employees();
+        let res = db
+            .query("SELECT COUNT(*), MIN(salary), MAX(salary), SUM(salary) FROM employees")
+            .unwrap();
+        assert_eq!(
+            res.columns,
+            vec!["COUNT(*)", "MIN(salary)", "MAX(salary)", "SUM(salary)"]
+        );
+        assert_eq!(res.rows.len(), 1);
+        assert_eq!(res.rows[0][0], Value::Int(3));
+        assert_eq!(res.rows[0][1], Value::Int(2000));
+        assert_eq!(res.rows[0][2], Value::Int(4000));
+        assert_eq!(res.rows[0][3], Value::Int(9000));
+    }
+
+    #[test]
+    fn test_aggregate_with_where() {
+        let db = setup_employees();
+        let res = db
+            .query("SELECT COUNT(*), SUM(salary) FROM employees WHERE salary > 2000")
+            .unwrap();
+        assert_eq!(res.rows[0][0], Value::Int(2));
+        assert_eq!(res.rows[0][1], Value::Int(7000));
+    }
+
+    #[test]
+    fn test_aggregate_on_empty_result_returns_null() {
+        let db = setup_employees();
+        let res = db
+            .query("SELECT MIN(salary) FROM employees WHERE salary > 999999")
+            .unwrap();
+        assert_eq!(res.rows[0][0], Value::Null);
+    }
+
+    #[test]
+    fn test_count_star_on_empty_result() {
+        let db = setup_employees();
+        let res = db
+            .query("SELECT COUNT(*) FROM employees WHERE salary > 999999")
+            .unwrap();
+        assert_eq!(res.rows[0][0], Value::Int(0));
+    }
+
+    #[test]
+    fn test_aggregate_on_text_column_returns_error() {
+        let db = setup_employees();
+        assert!(db.query("SELECT SUM(name) FROM employees").is_err());
+        assert!(db.query("SELECT MIN(name) FROM employees").is_err());
+        assert!(db.query("SELECT MAX(name) FROM employees").is_err());
+        assert!(db.query("SELECT AVG(name) FROM employees").is_err());
     }
 }

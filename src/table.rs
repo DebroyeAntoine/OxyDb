@@ -25,6 +25,15 @@ pub struct Schema {
     pub columns: Vec<ColumnDef>,
 }
 
+impl Schema {
+    pub fn index_of(&self, name: &str) -> Result<usize, String> {
+        self.columns
+            .iter()
+            .position(|col| col.name == name)
+            .ok_or_else(|| format!("Column '{}' not found", name))
+    }
+}
+
 /// Represents a database table stored in memory.
 ///
 /// Data is stored in a columnar format (one [Column] per schema field) to improve

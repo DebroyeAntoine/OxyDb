@@ -51,8 +51,8 @@ pub struct InsertInto {
 pub enum ColumnsSelect {
     /// Represents the `*` wildcard, indicating all columns should be returned.
     Star,
-    /// Represents a specific list of column names to be returned.
-    ColumnsNames(Vec<String>),
+    /// Represents a specific list of Items to be returned.
+    Items(Vec<SelectItem>),
 }
 
 /// Data structure representing a `SELECT` SQL statement.
@@ -72,6 +72,32 @@ pub struct Select {
 
     // Order by clause optionnal
     pub order_by: Option<Vec<OrderByClause>>,
+
+    pub group_by: Option<Vec<String>>,
+}
+
+#[derive(Debug, PartialEq, Clone, Allocative)]
+pub enum Aggregate {
+    /// SUM(column)
+    Sum(String),
+    /// AVG(column)
+    Avg(String),
+    /// MIN(column)
+    Min(String),
+    /// MAX(column)
+    Max(String),
+    /// COUNT(*)
+    CountStar,
+    /// COUNT(column)
+    Count(String),
+}
+
+#[derive(Debug, PartialEq, Clone, Allocative)]
+pub enum SelectItem {
+    /// A simple column
+    Column(String),
+    /// Aggregation: `SUM(price)` or `COUNT(*)`
+    Aggregate(Aggregate),
 }
 
 /// Data structure representing a `DELETE` SQL statement.

@@ -30,6 +30,14 @@ pub enum Token {
     Float,
     Bool,
 
+    // Select options
+    Count,
+    Avg,
+    Sum,
+    Min,
+    Max,
+    Group,
+
     // --- Identifiers & Literals ---
     /// A name representing a table or a column (e.g., `users`, `id`).
     Ident(String),
@@ -221,6 +229,12 @@ impl Tokenizer {
             "DESC" => Ok(Token::Desc),
             "SET" => Ok(Token::Set),
             "VACUUM" => Ok(Token::Vacuum),
+            "COUNT" => Ok(Token::Count),
+            "AVG" => Ok(Token::Avg),
+            "SUM" => Ok(Token::Sum),
+            "MIN" => Ok(Token::Min),
+            "MAX" => Ok(Token::Max),
+            "GROUP" => Ok(Token::Group),
             _ => Ok(Token::Ident(ident)),
         }
     }

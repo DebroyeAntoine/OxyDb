@@ -248,6 +248,29 @@ impl Parser {
         }))
     }
 
+    fn handle_count(&mut self) -> Result<SelectItem, String> {
+        self.advance();
+        self.consume(Token::LeftParen)?;
+        match self.current_token() {
+            Token::Star => {
+                self.consume(Token::Star)?;
+                self.consume(Token::RightParen)?;
+                Ok(SelectItem::Aggregate(Aggregate::CountStar))
+            }
+            Token::Ident(_) => {
+                let col = self.consume_ident()?;
+                self.consume(Token::RightParen)?;
+                Ok(SelectItem::Aggregate(Aggregate::Count(col.into())))
+            }
+            _ => {
+                return Err(format!(
+                    "Token {:?} not allowed in a COUNT",
+                    self.current_token()
+                ));
+            }
+        }
+    }
+
     /// Parses the column selection part of a `SELECT` statement (e.g., `*` or `col1, col2`).
     fn parse_columns(&mut self) -> Result<ColumnsSelect, String> {
         match self.current_token() {
@@ -255,15 +278,46 @@ impl Parser {
                 self.advance();
                 Ok(ColumnsSelect::Star)
             }
-            Token::Ident(_) => {
-                let mut cols = Vec::new();
+            _ => {
+                let mut items = Vec::new();
                 loop {
                     match self.current_token() {
+                        Token::Count => {
+                            items.push(self.handle_count()?);
+                        }
+                        Token::Sum => {
+                            self.advance();
+                            self.consume(Token::LeftParen)?;
+                            let col = self.consume_ident()?;
+                            self.consume(Token::RightParen)?;
+                            items.push(SelectItem::Aggregate(Aggregate::Sum(col)));
+                        }
+                        Token::Min => {
+                            self.advance();
+                            self.consume(Token::LeftParen)?;
+                            let col = self.consume_ident()?;
+                            self.consume(Token::RightParen)?;
+                            items.push(SelectItem::Aggregate(Aggregate::Min(col)));
+                        }
+                        Token::Max => {
+                            self.advance();
+                            self.consume(Token::LeftParen)?;
+                            let col = self.consume_ident()?;
+                            self.consume(Token::RightParen)?;
+                            items.push(SelectItem::Aggregate(Aggregate::Max(col)));
+                        }
+                        Token::Avg => {
+                            self.advance();
+                            self.consume(Token::LeftParen)?;
+                            let col = self.consume_ident()?;
+                            self.consume(Token::RightParen)?;
+                            items.push(SelectItem::Aggregate(Aggregate::Avg(col)));
+                        }
                         Token::Ident(name) => {
-                            cols.push(name.clone());
+                            items.push(SelectItem::Column(name.clone()));
                             self.advance();
                         }
-                        _ => return Err("Expected column name".into()),
+                        _ => return Err("Expected aggregate, * or column name".into()),
                     }
 
                     if *self.current_token() == Token::Comma {
@@ -272,9 +326,8 @@ impl Parser {
                     }
                     break;
                 }
-                Ok(ColumnsSelect::ColumnsNames(cols))
-            }
-            _ => Err("Expected '*' or column name".into()),
+                Ok(ColumnsSelect::Items(items))
+            } //_ => Err("Expected '*' or column name".into()),
         }
     }
 
@@ -288,6 +341,23 @@ impl Parser {
             if *self.current_token() == Token::Where {
                 self.advance();
                 Some(self.parse_expression()?)
+            } else {
+                None
+            }
+        };
+
+        let group_by = {
+            if *self.current_token() == Token::Group {
+                self.consume(Token::Group)?;
+                self.consume(Token::By)?;
+                let mut cols = vec![];
+                loop {
+                    cols.push(self.consume_ident()?);
+                    if self.consume(Token::Comma).is_err() {
+                        break;
+                    }
+                }
+                Some(cols)
             } else {
                 None
             }
@@ -324,6 +394,7 @@ impl Parser {
             where_clause,
             limit,
             order_by,
+            group_by,
         }))
     }
 
@@ -603,8 +674,11 @@ mod tests {
 
         match statement {
             Statement::Select(sel) => {
-                let columns = vec!["name".into(), "age".into()];
-                assert_eq!(sel.columns, ColumnsSelect::ColumnsNames(columns));
+                let columns: Vec<SelectItem> = vec![
+                    SelectItem::Column("name".into()),
+                    SelectItem::Column("age".into()),
+                ];
+                assert_eq!(sel.columns, ColumnsSelect::Items(columns));
                 assert_eq!(sel.table, "users".to_string());
             }
             _ => panic!("Expected Select"),
