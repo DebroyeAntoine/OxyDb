@@ -571,12 +571,20 @@ impl Database {
                     cols.push(format!("SUM({})", col));
                     let val = match dtype {
                         DataType::Int => {
-                            let sum: i64 = collect_int_col(rows, idx).into_iter().sum();
-                            Value::Int(sum)
+                            let vals = collect_int_col(rows, idx);
+                            if vals.is_empty() {
+                                Value::Null
+                            } else {
+                                Value::Int(vals.into_iter().sum())
+                            }
                         }
                         DataType::Float => {
-                            let sum: f64 = collect_float_col(rows, idx).into_iter().sum();
-                            Value::Float(sum)
+                            let vals = collect_float_col(rows, idx);
+                            if vals.is_empty() {
+                                Value::Null
+                            } else {
+                                Value::Float(vals.into_iter().sum())
+                            }
                         }
                         _ => unreachable!(),
                     };
@@ -1614,6 +1622,16 @@ mod tests {
         let db = setup_employees();
         let res = db
             .query("SELECT MIN(salary) FROM employees WHERE salary > 999999")
+            .unwrap();
+        assert_eq!(res.rows[0][0], Value::Null);
+
+        let res = db
+            .query("SELECT SUM(salary) FROM employees WHERE salary > 999999")
+            .unwrap();
+        assert_eq!(res.rows[0][0], Value::Null);
+
+        let res = db
+            .query("SELECT SUM(bonus) FROM employees WHERE salary > 999999")
             .unwrap();
         assert_eq!(res.rows[0][0], Value::Null);
     }
