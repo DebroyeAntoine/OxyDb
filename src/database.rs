@@ -539,6 +539,113 @@ impl Database {
         })
     }
 
+    fn col_name(agg: &Aggregate) -> String {
+        match agg {
+            Aggregate::CountStar => "COUNT(*)".into(),
+            Aggregate::Count(col) => format!("COUNT({})", col),
+            Aggregate::Avg(col) => format!("AVG({})", col),
+            Aggregate::Min(col) => format!("MIN({})", col),
+            Aggregate::Max(col) => format!("MAX({})", col),
+            Aggregate::Sum(col) => format!("SUM({})", col),
+        }
+    }
+
+    fn compute_single_aggregate(
+        agg: &Aggregate,
+        rows: &[Vec<Value>],
+        schema: &Schema,
+    ) -> Result<Value, String> {
+        match agg {
+            Aggregate::CountStar => Ok(Value::Int(rows.len() as i64)),
+
+            Aggregate::Count(col) => {
+                let idx = schema.index_of(col)?;
+                Ok(Value::Int(
+                    rows.iter().filter(|row| !row[idx].is_null()).count() as i64,
+                ))
+            }
+
+            Aggregate::Sum(col) => {
+                let (idx, dtype) = validate_numeric_col(schema, col)?;
+                let val = match dtype {
+                    DataType::Int => {
+                        let vals = collect_int_col(rows, idx);
+                        if vals.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::Int(vals.into_iter().sum())
+                        }
+                    }
+                    DataType::Float => {
+                        let vals = collect_float_col(rows, idx);
+                        if vals.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::Float(vals.into_iter().sum())
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+                Ok(val)
+            }
+
+            Aggregate::Min(col) => {
+                let (idx, dtype) = validate_numeric_col(schema, col)?;
+                let val = match dtype {
+                    DataType::Int => collect_int_col(rows, idx)
+                        .into_iter()
+                        .min()
+                        .map(Value::Int)
+                        .unwrap_or(Value::Null),
+                    DataType::Float => collect_float_col(rows, idx)
+                        .into_iter()
+                        .min_by(|a, b| a.partial_cmp(b).unwrap())
+                        .map(Value::Float)
+                        .unwrap_or(Value::Null),
+                    _ => unreachable!(),
+                };
+                Ok(val)
+            }
+
+            Aggregate::Max(col) => {
+                let (idx, dtype) = validate_numeric_col(schema, col)?;
+                let val = match dtype {
+                    DataType::Int => collect_int_col(rows, idx)
+                        .into_iter()
+                        .max()
+                        .map(Value::Int)
+                        .unwrap_or(Value::Null),
+                    DataType::Float => collect_float_col(rows, idx)
+                        .into_iter()
+                        .max_by(|a, b| a.partial_cmp(b).unwrap())
+                        .map(Value::Float)
+                        .unwrap_or(Value::Null),
+                    _ => unreachable!(),
+                };
+                Ok(val)
+            }
+
+            Aggregate::Avg(col) => {
+                let (idx, dtype) = validate_numeric_col(schema, col)?;
+                // AVG always returns Float (or NULL if no rows).
+                let vals = match dtype {
+                    DataType::Int => collect_int_col(rows, idx)
+                        .into_iter()
+                        .map(|v| v as f64)
+                        .collect::<Vec<f64>>(),
+                    DataType::Float => collect_float_col(rows, idx),
+                    _ => unreachable!(),
+                };
+                let val = if vals.is_empty() {
+                    Value::Null
+                } else {
+                    Value::Float(vals.iter().sum::<f64>() / vals.len() as f64)
+                };
+                Ok(val)
+            }
+        }
+    }
+
     fn compute_aggregates(
         &self,
         items: &[SelectItem],
@@ -552,103 +659,8 @@ impl Database {
             let SelectItem::Aggregate(aggr) = item else {
                 return Err("Non-aggregate item passed to compute_aggregates".into());
             };
-
-            match aggr {
-                Aggregate::CountStar => {
-                    cols.push("COUNT(*)".into());
-                    result_row.push(Value::Int(rows.len() as i64));
-                }
-
-                Aggregate::Count(col) => {
-                    let idx = schema.index_of(col)?;
-                    cols.push(format!("COUNT({})", col));
-                    let count = rows.iter().filter(|row| !row[idx].is_null()).count() as i64;
-                    result_row.push(Value::Int(count));
-                }
-
-                Aggregate::Sum(col) => {
-                    let (idx, dtype) = validate_numeric_col(schema, col)?;
-                    cols.push(format!("SUM({})", col));
-                    let val = match dtype {
-                        DataType::Int => {
-                            let vals = collect_int_col(rows, idx);
-                            if vals.is_empty() {
-                                Value::Null
-                            } else {
-                                Value::Int(vals.into_iter().sum())
-                            }
-                        }
-                        DataType::Float => {
-                            let vals = collect_float_col(rows, idx);
-                            if vals.is_empty() {
-                                Value::Null
-                            } else {
-                                Value::Float(vals.into_iter().sum())
-                            }
-                        }
-                        _ => unreachable!(),
-                    };
-                    result_row.push(val);
-                }
-
-                Aggregate::Min(col) => {
-                    let (idx, dtype) = validate_numeric_col(schema, col)?;
-                    cols.push(format!("MIN({})", col));
-                    let val = match dtype {
-                        DataType::Int => collect_int_col(rows, idx)
-                            .into_iter()
-                            .min()
-                            .map(Value::Int)
-                            .unwrap_or(Value::Null),
-                        DataType::Float => collect_float_col(rows, idx)
-                            .into_iter()
-                            .min_by(|a, b| a.partial_cmp(b).unwrap())
-                            .map(Value::Float)
-                            .unwrap_or(Value::Null),
-                        _ => unreachable!(),
-                    };
-                    result_row.push(val);
-                }
-
-                Aggregate::Max(col) => {
-                    let (idx, dtype) = validate_numeric_col(schema, col)?;
-                    cols.push(format!("MAX({})", col));
-                    let val = match dtype {
-                        DataType::Int => collect_int_col(rows, idx)
-                            .into_iter()
-                            .max()
-                            .map(Value::Int)
-                            .unwrap_or(Value::Null),
-                        DataType::Float => collect_float_col(rows, idx)
-                            .into_iter()
-                            .max_by(|a, b| a.partial_cmp(b).unwrap())
-                            .map(Value::Float)
-                            .unwrap_or(Value::Null),
-                        _ => unreachable!(),
-                    };
-                    result_row.push(val);
-                }
-
-                Aggregate::Avg(col) => {
-                    let (idx, dtype) = validate_numeric_col(schema, col)?;
-                    cols.push(format!("AVG({})", col));
-                    // AVG always returns Float (or NULL if no rows).
-                    let vals = match dtype {
-                        DataType::Int => collect_int_col(rows, idx)
-                            .into_iter()
-                            .map(|v| v as f64)
-                            .collect::<Vec<f64>>(),
-                        DataType::Float => collect_float_col(rows, idx),
-                        _ => unreachable!(),
-                    };
-                    let val = if vals.is_empty() {
-                        Value::Null
-                    } else {
-                        Value::Float(vals.iter().sum::<f64>() / vals.len() as f64)
-                    };
-                    result_row.push(val);
-                }
-            }
+            cols.push(Self::col_name(aggr));
+            result_row.push(Self::compute_single_aggregate(aggr, rows, schema)?);
         }
 
         Ok(QueryResult {
