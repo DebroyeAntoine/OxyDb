@@ -6,6 +6,8 @@
 //! 3. Data modification using UPDATE.
 //! 4. Row removal using DELETE with filtering.
 //! 5. Complex querying using WHERE, ORDER BY, and LIMIT.
+//! 6. Aggregate functions: COUNT, SUM, AVG, MIN, MAX.
+//! 7. GROUP BY with aggregate functions.
 
 use db::{Database, Value};
 
@@ -49,8 +51,18 @@ fn main() -> Result<(), String> {
         db.query("SELECT name, age FROM users WHERE age > 18 ORDER BY age DESC LIMIT 2")?;
     print_table(&result.columns, &result.rows);
 
-    // 6. Metadata
-    println!("\nStep 6: Database Metadata:");
+    // 6. Aggregate functions
+    println!("\nStep 6: Aggregate functions (no GROUP BY):");
+    println!("SQL: SELECT COUNT(*), SUM(age), AVG(age), MIN(age), MAX(age) FROM users");
+    let agg_res = db.query("SELECT COUNT(*), SUM(age), AVG(age), MIN(age), MAX(age) FROM users")?;
+    print_table(&agg_res.columns, &agg_res.rows);
+
+    // 7. GROUP BY
+    println!("\nStep 7: GROUP BY active status:");
+    println!("SQL: SELECT active, COUNT(*), AVG(age) FROM users GROUP BY active");
+    let group_res = db.query("SELECT active, COUNT(*), AVG(age) FROM users GROUP BY active")?;
+    print_table(&group_res.columns, &group_res.rows);
+
     println!("Existing tables: {:?}", db.list_tables());
 
     println!("\nDemo completed successfully.");

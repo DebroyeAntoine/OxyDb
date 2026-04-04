@@ -23,6 +23,7 @@ OxyDB is an educational project developed to master the Rust programming languag
     - `DELETE`: O(1) logical deletion via a deletion vector bitmap. Rows are marked as dead without any memory movement.
     - `SELECT`: Projection, filtering, and sorting. Dead rows are transparently skipped.
     - `VACUUM`: Physical compaction that permanently removes dead rows and reclaims memory. Can target a single table (`VACUUM users`) or all tables (`VACUUM`).
+- **Aggregate Functions**: `COUNT(*)`, `COUNT(col)`, `SUM`, `AVG`, `MIN`, `MAX` — with full `GROUP BY` support. Groups are partitioned via a `BTreeMap` keyed on group column values; `NULL` inputs follow SQL standard semantics (ignored by `SUM`/`AVG`/`MIN`/`MAX`, counted as 0 by `COUNT(*)`).
 - **Advanced Querying**:
     - **Recursive WHERE clauses**: Supports complex boolean logic (`AND`, `OR`, Comparisons).
     - **ORDER BY**: Multi-column sorting (Ascending/Descending).
@@ -140,7 +141,7 @@ cargo doc --open
 - [x] **Deletion Vectors**: O(1) logical delete with deferred physical compaction via `VACUUM`.
 - [x] **Auto-Vacuum**: Configurable automatic compaction with ratio and absolute count thresholds.
 - [x] **String Interning**: Implement a global string pool so identical string literals share a single memory allocation, reducing `Arc` overhead across large datasets.
-- [ ] **Aggregations**: Add `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` support with optional `GROUP BY`.
+- [x] **Aggregations**: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` with `GROUP BY` support.
 - [ ] **In-Memory Indexes**: Hash maps or B-Trees for O(1)/O(log n) lookups, with a query planner to choose between index scan and sequential scan.
 - [ ] **Joins**: Nested Loop Join first, then Hash Join for larger datasets.
 - [ ] **Persistence**: Write-Ahead Log (WAL) for crash recovery, plus columnar snapshot format for full reload on startup.
