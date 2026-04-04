@@ -10,7 +10,11 @@ use crate::{
     table::{Schema, Table},
     tokenizer::Tokenizer,
 };
-use std::{cmp::Ordering, collections::HashMap, sync::Arc};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 /// The main entry point for the in-memory database engine.
 /// It manages a collection of tables and orchestrates query execution.
@@ -508,7 +512,7 @@ impl Database {
                 );
             }
 
-            return self.compute_aggregates(items, &filtered_rows, &table.schema);
+            return Self::execute_group_by(items, &filtered_rows, group_by_cols, &table.schema);
         }
 
         // Plain column projection path.
@@ -558,6 +562,8 @@ impl Database {
         })
     }
 
+    /// Returns the SQL display name for an aggregate expression, used as the column
+    /// header in query results (e.g. `SUM(salary)`, `COUNT(*)`).
     fn col_name(agg: &Aggregate) -> String {
         match agg {
             Aggregate::CountStar => "COUNT(*)".into(),
@@ -569,6 +575,15 @@ impl Database {
         }
     }
 
+    /// Computes a single aggregate function over a slice of materialized rows.
+    ///
+    /// Returns `Value::Null` for `SUM`, `MIN`, `MAX`, and `AVG` when no non-null
+    /// values are present, matching SQL standard semantics. `COUNT` always returns
+    /// an integer (0 if no rows or all nulls).
+    ///
+    /// # Errors
+    /// Returns an error if the referenced column does not exist or is not numeric
+    /// (for `SUM`, `MIN`, `MAX`, `AVG`).
     fn compute_single_aggregate(
         agg: &Aggregate,
         rows: &[Vec<Value>],
@@ -665,26 +680,75 @@ impl Database {
         }
     }
 
-    fn compute_aggregates(
-        &self,
+    /// Partitions `rows` into groups defined by `group_by_cols`, then evaluates
+    /// each `SelectItem` (plain column or aggregate) per group, returning one
+    /// result row per group.
+    ///
+    /// When `group_by_cols` is empty (pure aggregate query without `GROUP BY`),
+    /// a single synthetic group is created so that aggregates over an empty
+    /// result set still produce one output row (e.g. `COUNT(*) = 0`).
+    ///
+    /// Callers must ensure that every `SelectItem::Column` in `items` appears
+    /// in `group_by_cols`; this is validated upstream in `query()`.
+    ///
+    /// # Errors
+    /// Returns an error if a column referenced in `items` or `group_by_cols`
+    /// does not exist in `schema`, or if an aggregate is applied to a
+    /// non-numeric column.
+    fn execute_group_by(
         items: &[SelectItem],
         rows: &[Vec<Value>],
+        group_by_cols: &[String],
         schema: &Schema,
     ) -> Result<QueryResult, String> {
-        let mut cols: Vec<String> = Vec::with_capacity(items.len());
-        let mut result_row: Vec<Value> = Vec::with_capacity(items.len());
+        let group_by_indexes: Vec<usize> = group_by_cols
+            .iter()
+            .map(|col| schema.index_of(col))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        for item in items {
-            let SelectItem::Aggregate(aggr) = item else {
-                return Err("Non-aggregate item passed to compute_aggregates".into());
-            };
-            cols.push(Self::col_name(aggr));
-            result_row.push(Self::compute_single_aggregate(aggr, rows, schema)?);
+        let mut groups: BTreeMap<Vec<Value>, Vec<Vec<Value>>> = BTreeMap::new();
+
+        // Without GROUP BY, always produce one group (even on empty input).
+        // SQL semantics: SELECT COUNT(*) FROM t WHERE false → 1 row with 0, not 0 rows.
+        if group_by_cols.is_empty() {
+            groups.entry(vec![]).or_default();
+        }
+
+        for row in rows {
+            groups
+                .entry(group_by_indexes.iter().map(|&i| row[i].clone()).collect())
+                .or_default()
+                .push(row.clone());
+        }
+
+        let cols: Vec<String> = items
+            .iter()
+            .map(|item| match item {
+                SelectItem::Column(name) => name.clone(),
+                SelectItem::Aggregate(agg) => Self::col_name(agg),
+            })
+            .collect();
+
+        let mut result_rows = Vec::with_capacity(groups.len());
+        for group_rows in groups.values() {
+            let row: Vec<Value> = items
+                .iter()
+                .map(|item| match item {
+                    SelectItem::Column(col) => {
+                        let idx = schema.index_of(col)?;
+                        Ok(group_rows[0][idx].clone())
+                    }
+                    SelectItem::Aggregate(agg) => {
+                        Self::compute_single_aggregate(agg, group_rows, schema)
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            result_rows.push(row);
         }
 
         Ok(QueryResult {
             columns: cols,
-            rows: vec![result_row],
+            rows: result_rows,
         })
     }
 
