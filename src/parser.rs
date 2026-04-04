@@ -171,6 +171,13 @@ impl Parser {
     fn parse_column_def(&mut self) -> Result<ColumnDef, String> {
         let name = self.consume_ident()?;
         let data_type = self.consume_data_type()?;
+        if self.current_token() == &Token::AutoIncrement {
+            if data_type != DataType::Int {
+                return Err("AUTOINCREMENT can only be set for INT column".into());
+            }
+            self.advance();
+            return Ok(ColumnDef::new(name, data_type).auto_increment());
+        }
         Ok(ColumnDef::new(name, data_type))
     }
 

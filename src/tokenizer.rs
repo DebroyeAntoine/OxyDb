@@ -73,6 +73,9 @@ pub enum Token {
     // --- Special ---
     /// Represents the End Of File/Input.
     Eof,
+    /// The `AUTOINCREMENT` keyword, used in `CREATE TABLE` column definitions
+    /// to mark an `INT` column as auto-generated on insert.
+    AutoIncrement,
 }
 
 /// A lexical scanner (lexer) that converts a raw SQL string into a sequence of [Token]s.
@@ -235,6 +238,7 @@ impl Tokenizer {
             "MIN" => Ok(Token::Min),
             "MAX" => Ok(Token::Max),
             "GROUP" => Ok(Token::Group),
+            "AUTOINCREMENT" => Ok(Token::AutoIncrement),
             _ => Ok(Token::Ident(ident)),
         }
     }

@@ -29,6 +29,14 @@ impl ColumnDef {
         }
     }
 
+    /// Marks this column as auto-incremented. Only valid for `DataType::Int` columns.
+    ///
+    /// Uses the builder pattern so it can be chained after [`ColumnDef::new`]:
+    /// `ColumnDef::new("id", DataType::Int).auto_increment()`
+    ///
+    /// When a table is created with such a column, `Table` will automatically
+    /// assign a monotonically increasing `i64` to any row inserted with
+    /// `Value::Null` at this position.
     pub fn auto_increment(mut self) -> Self {
         self.auto_increment = true;
         self
@@ -77,6 +85,16 @@ pub struct Table {
     /// If a string is used in the table, its strong count is as least 2 (one in the hashset and
     /// one in the table).
     string_interner: HashSet<Arc<str>>,
+
+    /// Next value to assign when inserting a row with `Value::Null` in the
+    /// auto-increment column. `None` if no column is auto-incremented.
+    /// Advances on each insert and is recalculated by [`Table::vacuum`] to
+    /// `max(remaining values) + 1`.
+    pub next_auto_id: Option<i64>,
+    /// Schema index (as `i64`) of the auto-increment column, or `None` if the
+    /// table has no auto-increment column. Set once at table creation and never
+    /// modified afterwards.
+    pub idx_col_auto_id: Option<i64>,
 }
 
 impl Table {
@@ -89,6 +107,14 @@ impl Table {
             .iter()
             .map(|column| Column::new(column.name.clone(), column.data_type))
             .collect();
+
+        let idx_col_auto_id = schema
+            .columns
+            .iter()
+            .position(|c| c.auto_increment)
+            .map(|i| i as i64);
+        let next_auto_id = idx_col_auto_id.map(|_| 1i64);
+
         Self {
             name,
             schema,
@@ -96,6 +122,8 @@ impl Table {
             row_count: 0,
             deletion_vector: bitvec!(),
             string_interner: HashSet::default(),
+            next_auto_id,
+            idx_col_auto_id,
         }
     }
 
@@ -113,7 +141,7 @@ impl Table {
     /// Returns an error if:
     /// - The number of values provided does not match the number of columns in the schema.
     /// - The data type of any value does not match the corresponding column's data type.
-    pub fn insert(&mut self, values: Vec<Value>) -> Result<(), String> {
+    pub fn insert(&mut self, mut values: Vec<Value>) -> Result<(), String> {
         // Validate row length
         if values.len() != self.schema.columns.len() {
             return Err(format!(
@@ -121,6 +149,20 @@ impl Table {
                 values.len(),
                 self.schema.columns.len()
             ));
+        }
+
+        // Fill auto-increment column if the value is Null
+        if let (Some(idx), Some(next_id)) = (self.idx_col_auto_id, &mut self.next_auto_id) {
+            let idx = idx as usize;
+            if values[idx] == Value::Null {
+                values[idx] = Value::Int(*next_id);
+                *next_id += 1;
+            } else if let Value::Int(v) = values[idx] {
+                // Explicit value provided — keep counter ahead
+                if v >= *next_id {
+                    *next_id = v + 1;
+                }
+            }
         }
 
         // Validate types and push values to respective columns
@@ -198,6 +240,20 @@ impl Table {
         self.row_count = new_row_count;
 
         self.deletion_vector = BitVec::repeat(false, new_row_count);
+
+        // Recalculate auto-increment counter from the remaining data
+        if let Some(idx) = self.idx_col_auto_id {
+            let col = &self.columns[idx as usize];
+            if let crate::column::ColumnData::Int(ref ints) = col.data {
+                let max_id = ints
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !col.null_bitmap[*i])
+                    .map(|(_, v)| *v)
+                    .max();
+                self.next_auto_id = Some(max_id.map_or(1, |m| m + 1));
+            }
+        }
 
         // clean all Arc<str> with strong count to one because they are no more used in the table.
         self.string_interner
@@ -396,5 +452,123 @@ mod tests {
         assert_eq!(row1[0], Value::Int(3));
 
         assert!(table.get_row(2).is_none());
+    }
+
+    fn make_auto_table() -> Table {
+        let schema = Schema {
+            columns: vec![
+                ColumnDef::new("id", DataType::Int).auto_increment(),
+                ColumnDef::new("name", DataType::Text),
+            ],
+        };
+        Table::new("users".into(), schema)
+    }
+
+    #[test]
+    fn test_auto_increment_init() {
+        let table = make_auto_table();
+        assert_eq!(table.idx_col_auto_id, Some(0));
+        assert_eq!(table.next_auto_id, Some(1));
+    }
+
+    #[test]
+    fn test_auto_increment_fills_null() {
+        let mut table = make_auto_table();
+        table
+            .insert(vec![Value::Null, Value::Text("Alice".into())])
+            .unwrap();
+        table
+            .insert(vec![Value::Null, Value::Text("Bob".into())])
+            .unwrap();
+
+        assert_eq!(table.get_row(0).unwrap()[0], Value::Int(1));
+        assert_eq!(table.get_row(1).unwrap()[0], Value::Int(2));
+        assert_eq!(table.next_auto_id, Some(3));
+    }
+
+    #[test]
+    fn test_auto_increment_explicit_value_advances_counter() {
+        let mut table = make_auto_table();
+        table
+            .insert(vec![Value::Int(10), Value::Text("Alice".into())])
+            .unwrap();
+        table
+            .insert(vec![Value::Null, Value::Text("Bob".into())])
+            .unwrap();
+
+        assert_eq!(table.get_row(0).unwrap()[0], Value::Int(10));
+        assert_eq!(table.get_row(1).unwrap()[0], Value::Int(11));
+        assert_eq!(table.next_auto_id, Some(12));
+    }
+
+    #[test]
+    fn test_auto_increment_explicit_low_value_no_regression() {
+        let mut table = make_auto_table();
+        table
+            .insert(vec![Value::Null, Value::Text("A".into())])
+            .unwrap(); // id=1
+        table
+            .insert(vec![Value::Int(0), Value::Text("B".into())])
+            .unwrap(); // explicit 0, counter stays at 2
+        table
+            .insert(vec![Value::Null, Value::Text("C".into())])
+            .unwrap(); // id=2
+
+        assert_eq!(table.get_row(1).unwrap()[0], Value::Int(0));
+        assert_eq!(table.get_row(2).unwrap()[0], Value::Int(2));
+    }
+
+    #[test]
+    fn test_auto_increment_vacuum_recalculates_counter() {
+        let mut table = make_auto_table();
+        table
+            .insert(vec![Value::Null, Value::Text("A".into())])
+            .unwrap(); // id=1
+        table
+            .insert(vec![Value::Null, Value::Text("B".into())])
+            .unwrap(); // id=2
+        table
+            .insert(vec![Value::Null, Value::Text("C".into())])
+            .unwrap(); // id=3
+
+        // Delete the row with the highest id
+        table.delete_row(2).unwrap();
+        table.vacuum().unwrap();
+
+        // Counter should be recalculated to max(1,2) + 1 = 3
+        assert_eq!(table.next_auto_id, Some(3));
+
+        table
+            .insert(vec![Value::Null, Value::Text("D".into())])
+            .unwrap();
+        assert_eq!(table.get_row(2).unwrap()[0], Value::Int(3));
+    }
+
+    #[test]
+    fn test_auto_increment_vacuum_all_deleted() {
+        let mut table = make_auto_table();
+        table
+            .insert(vec![Value::Null, Value::Text("A".into())])
+            .unwrap();
+        table.delete_row(0).unwrap();
+        table.vacuum().unwrap();
+
+        // All rows gone → counter resets to 1
+        assert_eq!(table.next_auto_id, Some(1));
+
+        table
+            .insert(vec![Value::Null, Value::Text("B".into())])
+            .unwrap();
+        assert_eq!(table.get_row(0).unwrap()[0], Value::Int(1));
+    }
+
+    #[test]
+    fn test_no_auto_increment_table_unchanged() {
+        let schema = Schema {
+            columns: vec![ColumnDef::new("id", DataType::Int)],
+        };
+        let table = Table::new("t".into(), schema);
+        assert_eq!(table.idx_col_auto_id, None);
+        assert_eq!(table.next_auto_id, None);
     }
 }
