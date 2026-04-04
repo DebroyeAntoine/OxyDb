@@ -936,14 +936,8 @@ mod tests {
     fn simple_schema() -> Schema {
         Schema {
             columns: vec![
-                ColumnDef {
-                    name: "id".to_string(),
-                    data_type: DataType::Int,
-                },
-                ColumnDef {
-                    name: "name".to_string(),
-                    data_type: DataType::Text,
-                },
+                ColumnDef::new("id", DataType::Int),
+                ColumnDef::new("name", DataType::Text),
             ],
         }
     }

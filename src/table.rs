@@ -18,6 +18,15 @@ pub struct ColumnDef {
     pub data_type: DataType,
 }
 
+impl ColumnDef {
+    pub fn new(name: impl Into<String>, data_type: DataType) -> Self {
+        Self {
+            name: name.into(),
+            data_type,
+        }
+    }
+}
+
 /// Defines the structure of a table, consisting of an ordered list of column definitions.
 #[derive(Debug, Clone, Allocative)]
 pub struct Schema {
@@ -243,14 +252,8 @@ mod tests {
     fn test_table_creation() {
         let schema = Schema {
             columns: vec![
-                ColumnDef {
-                    name: "id".into(),
-                    data_type: DataType::Int,
-                },
-                ColumnDef {
-                    name: "name".into(),
-                    data_type: DataType::Text,
-                },
+                ColumnDef::new("id", DataType::Int),
+                ColumnDef::new("name", DataType::Text),
             ],
         };
 
@@ -263,14 +266,8 @@ mod tests {
     fn test_table_insert_and_get() {
         let schema = Schema {
             columns: vec![
-                ColumnDef {
-                    name: "id".into(),
-                    data_type: DataType::Int,
-                },
-                ColumnDef {
-                    name: "age".into(),
-                    data_type: DataType::Int,
-                },
+                ColumnDef::new("id", DataType::Int),
+                ColumnDef::new("age", DataType::Int),
             ],
         };
 
@@ -291,19 +288,14 @@ mod tests {
     #[test]
     fn test_column_count_mismatch() {
         let schema = Schema {
-            columns: vec![ColumnDef {
-                name: "id".into(),
-                data_type: DataType::Int,
-            }],
+            columns: vec![ColumnDef::new("id", DataType::Int)],
         };
 
         let mut table = Table::new("test".into(), schema);
 
-        // Trop de colonnes
         let result = table.insert(vec![Value::Int(1), Value::Int(2)]);
         assert!(result.is_err());
 
-        // Pas assez de colonnes
         let result = table.insert(vec![]);
         assert!(result.is_err());
     }
@@ -311,15 +303,11 @@ mod tests {
     #[test]
     fn test_type_mismatch_error() {
         let schema = Schema {
-            columns: vec![ColumnDef {
-                name: "id".into(),
-                data_type: DataType::Int,
-            }],
+            columns: vec![ColumnDef::new("id", DataType::Int)],
         };
 
         let mut table = Table::new("test".into(), schema);
 
-        // Type incorrect
         let result = table.insert(vec![Value::Text("hello".into())]);
         assert!(result.is_err());
     }
@@ -328,14 +316,8 @@ mod tests {
     fn test_get_col() {
         let schema = Schema {
             columns: vec![
-                ColumnDef {
-                    name: "id".into(),
-                    data_type: DataType::Int,
-                },
-                ColumnDef {
-                    name: "name".into(),
-                    data_type: DataType::Text,
-                },
+                ColumnDef::new("id", DataType::Int),
+                ColumnDef::new("name", DataType::Text),
             ],
         };
 
@@ -350,14 +332,8 @@ mod tests {
     fn test_remove_row() {
         let schema = Schema {
             columns: vec![
-                ColumnDef {
-                    name: "id".into(),
-                    data_type: DataType::Int,
-                },
-                ColumnDef {
-                    name: "age".into(),
-                    data_type: DataType::Int,
-                },
+                ColumnDef::new("id", DataType::Int),
+                ColumnDef::new("age", DataType::Int),
             ],
         };
 
@@ -381,14 +357,8 @@ mod tests {
     fn test_table_vacuum() {
         let schema = Schema {
             columns: vec![
-                ColumnDef {
-                    name: "id".into(),
-                    data_type: DataType::Int,
-                },
-                ColumnDef {
-                    name: "val".into(),
-                    data_type: DataType::Int,
-                },
+                ColumnDef::new("id", DataType::Int),
+                ColumnDef::new("val", DataType::Int),
             ],
         };
         let mut table = Table::new("test".into(), schema);

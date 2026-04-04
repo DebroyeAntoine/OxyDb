@@ -171,7 +171,7 @@ impl Parser {
     fn parse_column_def(&mut self) -> Result<ColumnDef, String> {
         let name = self.consume_ident()?;
         let data_type = self.consume_data_type()?;
-        Ok(ColumnDef { name, data_type })
+        Ok(ColumnDef::new(name, data_type))
     }
 
     /// Parses a full `CREATE TABLE` statement.
