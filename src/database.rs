@@ -489,6 +489,25 @@ impl Database {
         if let ColumnsSelect::Items(ref items) = select.columns
             && items.iter().any(|i| matches!(i, SelectItem::Aggregate(_)))
         {
+            let selected_cols: Vec<&String> = items
+                .iter()
+                .filter_map(|item| {
+                    if let SelectItem::Column(name) = item {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let group_by_cols = select.group_by.as_deref().unwrap_or(&[]);
+            if !selected_cols.is_empty() && !selected_cols.iter().all(|s| group_by_cols.contains(s))
+            {
+                return Err(
+                    "Columns in a SELECT with aggregates must also appear in GROUP BY".into(),
+                );
+            }
+
             return self.compute_aggregates(items, &filtered_rows, &table.schema);
         }
 
