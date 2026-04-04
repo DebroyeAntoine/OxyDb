@@ -1748,4 +1748,95 @@ mod tests {
         assert!(db.query("SELECT MAX(name) FROM employees").is_err());
         assert!(db.query("SELECT AVG(name) FROM employees").is_err());
     }
+
+    fn setup_departments() -> Database {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE emp (name TEXT, dept TEXT, salary INT)")
+            .unwrap();
+        db.execute("INSERT INTO emp VALUES ('Alice', 'Sales', 3000)")
+            .unwrap();
+        db.execute("INSERT INTO emp VALUES ('Bob',   'Sales', 4000)")
+            .unwrap();
+        db.execute("INSERT INTO emp VALUES ('Carol', 'HR',    2000)")
+            .unwrap();
+        db.execute("INSERT INTO emp VALUES ('Dave',  'HR',    5000)")
+            .unwrap();
+        db.execute("INSERT INTO emp VALUES ('Eve',   'Sales', 3500)")
+            .unwrap();
+        db
+    }
+
+    #[test]
+    fn test_group_by_count_star() {
+        let db = setup_departments();
+        let res = db
+            .query("SELECT dept, COUNT(*) FROM emp GROUP BY dept")
+            .unwrap();
+        assert_eq!(res.columns, vec!["dept", "COUNT(*)"]);
+        assert_eq!(res.rows.len(), 2);
+        assert_eq!(res.rows[0][0], Value::Text("HR".into()));
+        assert_eq!(res.rows[0][1], Value::Int(2));
+        assert_eq!(res.rows[1][0], Value::Text("Sales".into()));
+        assert_eq!(res.rows[1][1], Value::Int(3));
+    }
+
+    #[test]
+    fn test_group_by_sum() {
+        let db = setup_departments();
+        let res = db
+            .query("SELECT dept, SUM(salary) FROM emp GROUP BY dept")
+            .unwrap();
+        assert_eq!(res.rows[0][1], Value::Int(7000)); // HR:  2000+5000
+        assert_eq!(res.rows[1][1], Value::Int(10500)); // Sales: 3000+4000+3500
+    }
+
+    #[test]
+    fn test_group_by_min_max() {
+        let db = setup_departments();
+        let res = db
+            .query("SELECT dept, MIN(salary), MAX(salary) FROM emp GROUP BY dept")
+            .unwrap();
+        assert_eq!(res.columns, vec!["dept", "MIN(salary)", "MAX(salary)"]);
+        // HR
+        assert_eq!(res.rows[0][1], Value::Int(2000));
+        assert_eq!(res.rows[0][2], Value::Int(5000));
+        // Sales
+        assert_eq!(res.rows[1][1], Value::Int(3000));
+        assert_eq!(res.rows[1][2], Value::Int(4000));
+    }
+
+    #[test]
+    fn test_group_by_with_where() {
+        let db = setup_departments();
+        let res = db
+            .query("SELECT dept, COUNT(*) FROM emp WHERE salary > 3000 GROUP BY dept")
+            .unwrap();
+        assert_eq!(res.rows.len(), 2);
+        assert_eq!(res.rows[0][1], Value::Int(1)); // HR
+        assert_eq!(res.rows[1][1], Value::Int(2)); // Sales
+    }
+
+    #[test]
+    fn test_group_by_all_filtered_returns_no_rows() {
+        let db = setup_departments();
+        let res = db
+            .query("SELECT dept, COUNT(*) FROM emp WHERE salary > 999999 GROUP BY dept")
+            .unwrap();
+        assert_eq!(res.rows.len(), 0);
+    }
+
+    #[test]
+    fn test_group_by_column_not_in_group_by_is_error() {
+        let db = setup_departments();
+        assert!(
+            db.query("SELECT name, COUNT(*) FROM emp GROUP BY dept")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_aggregate_without_group_by_column_is_error() {
+        let db = setup_departments();
+        assert!(db.query("SELECT dept, COUNT(*) FROM emp").is_err());
+    }
 }
