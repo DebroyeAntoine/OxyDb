@@ -16,6 +16,8 @@ pub struct ColumnDef {
     pub name: String,
     /// The data type allowed for this column.
     pub data_type: DataType,
+    /// If the value can be auto incremented WARNING: Only for Value::Int
+    pub auto_increment: bool,
 }
 
 impl ColumnDef {
@@ -23,7 +25,13 @@ impl ColumnDef {
         Self {
             name: name.into(),
             data_type,
+            auto_increment: false,
         }
+    }
+
+    pub fn auto_increment(mut self) -> Self {
+        self.auto_increment = true;
+        self
     }
 }
 
