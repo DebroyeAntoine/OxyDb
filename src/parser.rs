@@ -173,7 +173,7 @@ impl Parser {
         let data_type = self.consume_data_type()?;
         if self.current_token() == &Token::AutoIncrement {
             if data_type != DataType::Int {
-                return Err("AUTOINCREMENT can only be set for INT column".into());
+                return Err("AUTO_INCREMENT can only be set for INT column".into());
             }
             self.advance();
             return Ok(ColumnDef::new(name, data_type).auto_increment());
