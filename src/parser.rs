@@ -9,16 +9,17 @@ use crate::{ColumnDef, DataType, Value, ast::*};
 /// A recursive descent parser that transforms a sequence of [Token]s
 /// into an Abstract Syntax Tree (AST) represented by a [Statement].
 #[derive(Allocative)]
-pub struct Parser {
+pub struct Parser<'a> {
     /// The stream of tokens produced by the Tokenizer.
-    tokens: Vec<Token>,
+    #[allocative(skip)]
+    tokens: Vec<Token<'a>>,
     /// The current index in the token stream.
     position: usize,
 }
 
-impl Parser {
+impl<'a> Parser<'a> {
     /// Creates a new parser from a list of tokens.
-    pub fn new(tokens: Vec<Token>) -> Self {
+    pub fn new(tokens: Vec<Token<'a>>) -> Self {
         Self {
             tokens,
             position: 0,
@@ -63,7 +64,7 @@ impl Parser {
     // --- Navigation Helpers ---
 
     /// Returns a reference to the token at the current position.
-    fn current_token(&self) -> &Token {
+    fn current_token(&self) -> &Token<'a> {
         &self.tokens[self.position]
     }
 
@@ -98,7 +99,7 @@ impl Parser {
     fn consume_ident(&mut self) -> Result<String, String> {
         match self.current_token() {
             Token::Ident(string) => {
-                let string = string.clone();
+                let string = string.to_string();
                 self.advance();
                 Ok(string)
             }
@@ -131,7 +132,7 @@ impl Parser {
                 Ok(Value::Bool(false))
             }
             Token::String(string) => {
-                let text = Arc::from(string.as_str());
+                let text = Arc::from(*string);
                 self.advance();
                 Ok(Value::Text(text))
             }
@@ -319,7 +320,7 @@ impl Parser {
                             items.push(SelectItem::Aggregate(Aggregate::Avg(col)));
                         }
                         Token::Ident(name) => {
-                            items.push(SelectItem::Column(name.clone()));
+                            items.push(SelectItem::Column(name.to_string()));
                             self.advance();
                         }
                         _ => return Err("Expected aggregate, * or column name".into()),

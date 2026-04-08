@@ -1,8 +1,6 @@
-use allocative::Allocative;
-
 /// Represents the smallest meaningful units (atoms) of the SQL language.
-#[derive(Debug, Clone, PartialEq, Allocative)]
-pub enum Token {
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token<'a> {
     // --- SQL Keywords ---
     Create,
     Table,
@@ -40,11 +38,11 @@ pub enum Token {
 
     // --- Identifiers & Literals ---
     /// A name representing a table or a column (e.g., `users`, `id`).
-    Ident(String),
+    Ident(&'a str),
     /// A 64-bit integer literal (e.g., `42`).
     Number(i64),
     /// A string literal, defined between single quotes (e.g., `'Alice'`).
-    String(String),
+    String(&'a str),
     /// A 64-bit floating-point literal (e.g., `3.14`).
     FloatNumber(f64),
     /// The boolean literal `TRUE`.
@@ -79,20 +77,17 @@ pub enum Token {
 }
 
 /// A lexical scanner (lexer) that converts a raw SQL string into a sequence of [Token]s.
-pub struct Tokenizer {
+pub struct Tokenizer<'a> {
     /// The input string stored as a vector of characters for easy iteration.
-    input: Vec<char>,
+    input: &'a str,
     /// The current position in the character vector.
     position: usize,
 }
 
-impl Tokenizer {
+impl<'a> Tokenizer<'a> {
     /// Creates a new Tokenizer for the given input string.
-    pub fn new(input: &str) -> Self {
-        Self {
-            input: input.chars().collect(),
-            position: 0,
-        }
+    pub fn new(input: &'a str) -> Self {
+        Self { input, position: 0 }
     }
 
     /// Processes the entire input and returns a vector of tokens.
@@ -108,7 +103,7 @@ impl Tokenizer {
     /// let tokens = t.tokenize().unwrap();
     /// assert_eq!(tokens[0], Token::Select);
     /// ```
-    pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
+    pub fn tokenize(&mut self) -> Result<Vec<Token<'a>>, String> {
         let mut tokens = Vec::new();
 
         while !self.is_at_end() {
@@ -127,7 +122,7 @@ impl Tokenizer {
     }
 
     /// Identifies the next token based on the character at the current position.
-    fn next_token(&mut self) -> Result<Token, String> {
+    fn next_token(&mut self) -> Result<Token<'a>, String> {
         let ch = self.current_char();
 
         match ch {
@@ -170,7 +165,7 @@ impl Tokenizer {
 
     /// Returns the character at the current position.
     fn current_char(&self) -> char {
-        self.input[self.position]
+        self.input.as_bytes()[self.position] as char
     }
 
     /// Moves the cursor forward by one character.
@@ -196,15 +191,15 @@ impl Tokenizer {
     /// a reserved SQL keyword or a user-defined identifier.
     ///
     /// Keywords are matched case-insensitively.
-    fn read_identifier(&mut self) -> Result<Token, String> {
-        let mut ident = String::new();
-
+    fn read_identifier(&mut self) -> Result<Token<'a>, String> {
+        let start = self.position;
         while !self.is_at_end()
             && (self.current_char().is_alphanumeric() || self.current_char() == '_')
         {
-            ident.push(self.current_char());
             self.advance();
         }
+
+        let ident = &self.input[start..self.position];
 
         match ident.to_uppercase().as_str() {
             "CREATE" => Ok(Token::Create),
@@ -245,8 +240,8 @@ impl Tokenizer {
 
     /// Reads a numeric literal. If a dot `.` is encountered, it returns a
     /// [Token::FloatNumber], otherwise a [Token::Number].
-    fn read_number(&mut self) -> Result<Token, String> {
-        let mut number = String::new();
+    fn read_number(&mut self) -> Result<Token<'a>, String> {
+        let start = self.position;
         let mut has_dot = false;
 
         while !self.is_at_end()
@@ -255,9 +250,9 @@ impl Tokenizer {
             if self.current_char() == '.' {
                 has_dot = true;
             }
-            number.push(self.current_char());
             self.advance();
         }
+        let number = &self.input[start..self.position];
 
         if !self.is_at_end() && self.current_char() == '.' {
             return Err("multiple dots are not allowed for a float".into());
@@ -277,17 +272,16 @@ impl Tokenizer {
     }
 
     /// Reads a string literal enclosed in single quotes.
-    fn read_string(&mut self) -> Result<Token, String> {
+    fn read_string(&mut self) -> Result<Token<'a>, String> {
         self.advance(); // Skip the opening quote
 
         if !self.is_at_end() && self.current_char() == '\'' {
             self.advance(); // Consume empty string closing quote
-            return Ok(Token::String(String::new()));
+            return Ok(Token::String(""));
         }
 
-        let mut string = String::new();
+        let start = self.position;
         while !self.is_at_end() && self.current_char() != '\'' {
-            string.push(self.current_char());
             self.advance();
         }
 
@@ -295,10 +289,11 @@ impl Tokenizer {
             return Err("Unterminated string".into());
         }
 
+        let end = self.position;
         // Skip the closing quote
         self.advance();
 
-        Ok(Token::String(string))
+        Ok(Token::String(&self.input[start..end]))
     }
 }
 
@@ -313,12 +308,7 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![
-                Token::Create,
-                Token::Table,
-                Token::Ident("users".into()),
-                Token::Eof,
-            ]
+            vec![Token::Create, Token::Table, Token::Ident("users"), Token::Eof,]
         );
     }
 
@@ -331,9 +321,9 @@ mod tests {
             tokens,
             vec![
                 Token::LeftParen,
-                Token::Ident("id".into()),
+                Token::Ident("id"),
                 Token::Comma,
-                Token::Ident("name".into()),
+                Token::Ident("name"),
                 Token::RightParen,
                 Token::Eof,
             ]
@@ -350,12 +340,12 @@ mod tests {
             vec![
                 Token::Create,
                 Token::Table,
-                Token::Ident("users".into()),
+                Token::Ident("users"),
                 Token::LeftParen,
-                Token::Ident("id".into()),
+                Token::Ident("id"),
                 Token::Int,
                 Token::Comma,
-                Token::Ident("name".into()),
+                Token::Ident("name"),
                 Token::Text,
                 Token::RightParen,
                 Token::Eof,
@@ -405,19 +395,68 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::String("Alice".into()),
+                Token::String("Alice"),
                 Token::Comma,
-                Token::String("Bob Dylan".into()),
+                Token::String("Bob Dylan"),
                 Token::Eof,
             ]
         );
     }
 
     #[test]
+    fn test_tokenize_empty_string() {
+        let mut tokenizer = Tokenizer::new("''");
+        let tokens = tokenizer.tokenize().unwrap();
+        assert_eq!(tokens, vec![Token::String(""), Token::Eof]);
+    }
+
+    #[test]
     fn test_unterminated_string() {
         let mut tokenizer = Tokenizer::new("'hello");
         let result = tokenizer.tokenize();
-
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_zero_copy_ident_borrows_input() {
+        let sql = "SELECT users";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        // The &str inside Ident points directly into the original sql string
+        if let Token::Ident(name) = tokens[1] {
+            assert!(std::ptr::eq(name.as_bytes(), sql[7..].as_bytes()));
+        } else {
+            panic!("Expected Ident token");
+        }
+    }
+
+    #[test]
+    fn test_zero_copy_string_borrows_input() {
+        let sql = "'hello'";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        // The &str inside String points into the original sql (without quotes)
+        if let Token::String(s) = tokens[0] {
+            assert_eq!(s, "hello");
+            assert!(std::ptr::eq(s.as_bytes(), sql[1..6].as_bytes()));
+        } else {
+            panic!("Expected String token");
+        }
+    }
+
+    #[test]
+    fn test_ident_at_end_of_input() {
+        let mut tokenizer = Tokenizer::new("users");
+        let tokens = tokenizer.tokenize().unwrap();
+        assert_eq!(tokens, vec![Token::Ident("users"), Token::Eof]);
+    }
+
+    #[test]
+    fn test_case_insensitive_keywords() {
+        let mut tokenizer = Tokenizer::new("select FROM");
+        let tokens = tokenizer.tokenize().unwrap();
+        assert_eq!(tokens, vec![Token::Select, Token::From, Token::Eof]);
     }
 }
