@@ -10,6 +10,7 @@
 //! 7. GROUP BY with aggregate functions.
 
 use db::{Database, Value};
+use std::borrow::Cow;
 
 fn main() -> Result<(), String> {
     println!("--- OxyDB In-Memory SQL Demo ---\n");
@@ -70,7 +71,7 @@ fn main() -> Result<(), String> {
 }
 
 /// Helper function included in the demo to print results nicely
-fn print_table(columns: &[String], rows: &[Vec<Value>]) {
+fn print_table(columns: &[Cow<'_, str>], rows: &[Vec<Value>]) {
     if rows.is_empty() {
         println!("(empty set)");
         return;

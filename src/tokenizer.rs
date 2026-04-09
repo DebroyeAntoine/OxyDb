@@ -308,7 +308,12 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![Token::Create, Token::Table, Token::Ident("users"), Token::Eof,]
+            vec![
+                Token::Create,
+                Token::Table,
+                Token::Ident("users"),
+                Token::Eof,
+            ]
         );
     }
 

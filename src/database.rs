@@ -11,6 +11,7 @@ use crate::{
     tokenizer::Tokenizer,
 };
 use std::{
+    borrow::Cow,
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
     sync::Arc,
@@ -28,9 +29,10 @@ pub struct Database {
 
 /// Represents the result of a successful `SELECT` query.
 #[derive(Debug, Allocative)]
-pub struct QueryResult {
+pub struct QueryResult<'a> {
     /// The names of the columns included in the result set.
-    pub columns: Vec<String>,
+    #[allocative(skip)]
+    pub columns: Vec<Cow<'a, str>>,
     /// The actual data, returned as a vector of rows, where each row is a vector of [Value].
     pub rows: Vec<Vec<Value>>,
 }
@@ -92,7 +94,7 @@ fn validate_numeric_col(schema: &Schema, col: &str) -> Result<(usize, DataType),
     Ok((schema.index_of(col)?, column.data_type))
 }
 
-impl Database {
+impl<'a> Database {
     /// Creates a new, empty database instance.
     pub fn new() -> Self {
         Self {
@@ -105,12 +107,12 @@ impl Database {
     ///
     /// # Errors
     /// Returns an error if a table with the same name already exists.
-    pub fn create_table(&mut self, name: String, schema: Schema) -> Result<(), String> {
-        if self.tables.contains_key(&name) {
+    pub fn create_table(&mut self, name: &str, schema: Schema) -> Result<(), String> {
+        if self.tables.contains_key(name) {
             return Err(format!("Table {} already exists in the database", name));
         }
-        let table = Table::new(name.clone(), schema);
-        self.tables.insert(name, table);
+        let table = Table::new(name.to_string(), schema);
+        self.tables.insert(name.to_string(), table);
         Ok(())
     }
 
@@ -160,7 +162,7 @@ impl Database {
     /// let result = db.query("SELECT * FROM users").unwrap();
     /// assert_eq!(result.rows[0][0], Value::Int(1));
     /// ```
-    pub fn execute(&mut self, sql: &str) -> Result<(), String> {
+    pub fn execute(&mut self, sql: &'a str) -> Result<(), String> {
         let tokens = Tokenizer::new(sql).tokenize()?;
         let statement = Parser::new(tokens).parse()?;
 
@@ -201,7 +203,7 @@ impl Database {
     /// 3. Some columns are missing (filling them with `NULL`).
     fn insert(&mut self, insert: InsertInto) -> Result<(), String> {
         let table = self
-            .get_table_mut(&insert.table)
+            .get_table_mut(insert.table)
             .ok_or_else(|| format!("Table {:?} does not exist", insert.table))?;
 
         let values = match insert.columns {
@@ -218,7 +220,7 @@ impl Database {
                 }
 
                 // Map provided values to their column names
-                let mut provided_values: HashMap<String, Value> =
+                let mut provided_values: HashMap<&str, Value> =
                     columns.into_iter().zip(insert.values).collect();
 
                 // Build the final row by following the schema's column order
@@ -226,7 +228,11 @@ impl Database {
                     .schema
                     .columns
                     .iter()
-                    .map(|col| provided_values.remove(&col.name).unwrap_or(Value::Null))
+                    .map(|col| {
+                        provided_values
+                            .remove(col.name.as_str())
+                            .unwrap_or(Value::Null)
+                    })
                     .collect()
             }
         };
@@ -307,20 +313,20 @@ impl Database {
     fn delete(&mut self, mut delete: Delete) -> Result<(), String> {
         self.bind_expression(
             &mut delete.where_clause,
-            self.get_table(&delete.table)
+            self.get_table(delete.table)
                 .ok_or_else(|| format!("table {:?} does not exist", delete.table))?,
         );
 
         let rows_to_delete = {
             let table = self
-                .get_table(&delete.table)
+                .get_table(delete.table)
                 .ok_or_else(|| format!("table {:?} does not exist", delete.table))?;
 
             self.filter_rows(table, Some(&delete.where_clause), |i, _| i)?
         };
 
         let table = self
-            .get_table_mut(&delete.table)
+            .get_table_mut(delete.table)
             .ok_or_else(|| format!("table {:?} does not exist", delete.table))?;
 
         let mut rows = rows_to_delete;
@@ -333,7 +339,7 @@ impl Database {
         }
 
         // Auto-Vacuum phase (Physical compaction)
-        self.maybe_auto_vacuum(&delete.table)?;
+        self.maybe_auto_vacuum(delete.table)?;
 
         Ok(())
     }
@@ -354,18 +360,18 @@ impl Database {
     fn update(&mut self, mut update: Update) -> Result<(), String> {
         self.bind_expression(
             &mut update.where_clause,
-            self.get_table(&update.table)
+            self.get_table(update.table)
                 .ok_or_else(|| format!("table {:?} does not exist", update.table))?,
         );
 
         let rows_to_update = {
             let table = self
-                .get_table(&update.table)
+                .get_table(update.table)
                 .ok_or_else(|| format!("table {:?} does not exist", update.table))?;
             self.filter_rows(table, Some(&update.where_clause), |i, _| i)?
         };
         let table = self
-            .get_table_mut(&update.table)
+            .get_table_mut(update.table)
             .ok_or_else(|| format!("table {:?} does not exist", update.table))?;
         table.update(&rows_to_update, update.assignments)?;
         Ok(())
@@ -410,11 +416,11 @@ impl Database {
     /// db.execute("DELETE FROM users WHERE id = 1").unwrap();
     /// db.execute("VACUUM users").unwrap();
     /// ```
-    fn vacuum(&mut self, table: Option<String>) -> Result<(), String> {
+    fn vacuum(&mut self, table: Option<&str>) -> Result<(), String> {
         // exec vacuum on selected table
         if let Some(selected_table) = table {
             let selected_table = self
-                .get_table_mut(&selected_table)
+                .get_table_mut(selected_table)
                 .ok_or_else(|| format!("Table {} is not present in database", selected_table))?;
             selected_table.vacuum()?;
             Ok(())
@@ -462,7 +468,7 @@ impl Database {
     /// - The SQL is not a valid `SELECT` statement.
     /// - The specified table does not exist.
     /// - One or more specified columns do not exist.
-    pub fn query(&self, sql: &str) -> Result<QueryResult, String> {
+    pub fn query(&self, sql: &'a str) -> Result<QueryResult<'a>, String> {
         let tokens = Tokenizer::new(sql).tokenize()?;
         let statement = Parser::new(tokens).parse()?;
 
@@ -478,7 +484,7 @@ impl Database {
         };
 
         let table = self
-            .get_table(&select.table)
+            .get_table(select.table)
             .ok_or_else(|| format!("table {:?} does not exist", select.table))?;
 
         if let Some(ref mut expr) = select.where_clause {
@@ -493,11 +499,11 @@ impl Database {
         if let ColumnsSelect::Items(ref items) = select.columns
             && items.iter().any(|i| matches!(i, SelectItem::Aggregate(_)))
         {
-            let selected_cols: Vec<&String> = items
+            let selected_cols: Vec<&str> = items
                 .iter()
                 .filter_map(|item| {
                     if let SelectItem::Column(name) = item {
-                        Some(name)
+                        Some(*name)
                     } else {
                         None
                     }
@@ -516,17 +522,17 @@ impl Database {
         }
 
         // Plain column projection path.
-        let selected_cols: Vec<String> = match select.columns {
+        let selected_cols: Vec<Cow<'a, str>> = match select.columns {
             ColumnsSelect::Star => table
                 .schema
                 .columns
                 .iter()
-                .map(|col| col.name.clone())
+                .map(|col| Cow::Owned(col.name.clone()))
                 .collect(),
             ColumnsSelect::Items(items) => items
                 .into_iter()
                 .map(|item| match item {
-                    SelectItem::Column(name) => Ok(name),
+                    SelectItem::Column(name) => Ok(Cow::Borrowed(name)),
                     SelectItem::Aggregate(_) => unreachable!(),
                 })
                 .collect::<Result<Vec<_>, String>>()?,
@@ -696,11 +702,11 @@ impl Database {
     /// does not exist in `schema`, or if an aggregate is applied to a
     /// non-numeric column.
     fn execute_group_by(
-        items: &[SelectItem],
+        items: &[SelectItem<'a>],
         rows: &[Vec<Value>],
-        group_by_cols: &[String],
+        group_by_cols: &[&str],
         schema: &Schema,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult<'a>, String> {
         let group_by_indexes: Vec<usize> = group_by_cols
             .iter()
             .map(|col| schema.index_of(col))
@@ -721,11 +727,11 @@ impl Database {
                 .push(row.clone());
         }
 
-        let cols: Vec<String> = items
+        let cols: Vec<Cow<'a, str>> = items
             .iter()
             .map(|item| match item {
-                SelectItem::Column(name) => name.clone(),
-                SelectItem::Aggregate(agg) => Self::col_name(agg),
+                SelectItem::Column(name) => Cow::Borrowed(*name),
+                SelectItem::Aggregate(agg) => Cow::Owned(Self::col_name(agg)),
             })
             .collect();
 
@@ -920,7 +926,7 @@ impl Database {
             .unwrap_or(false);
 
         if needs_vacuum {
-            self.vacuum(Some(table_name.to_string()))?;
+            self.vacuum(Some(table_name))?;
         }
         Ok(())
     }
@@ -946,10 +952,7 @@ mod tests {
     fn test_create_and_drop_table() {
         let mut db = Database::new();
 
-        assert!(
-            db.create_table("users".to_string(), simple_schema())
-                .is_ok()
-        );
+        assert!(db.create_table("users", simple_schema()).is_ok());
         assert!(db.get_table("users").is_some());
 
         assert!(db.drop_table("users").is_ok());
@@ -960,11 +963,8 @@ mod tests {
     fn test_duplicate_table_error() {
         let mut db = Database::new();
 
-        assert!(
-            db.create_table("users".to_string(), simple_schema())
-                .is_ok()
-        );
-        let err = db.create_table("users".to_string(), simple_schema());
+        assert!(db.create_table("users", simple_schema()).is_ok());
+        let err = db.create_table("users", simple_schema());
 
         assert!(err.is_err());
     }
@@ -981,10 +981,8 @@ mod tests {
     fn test_list_tables() {
         let mut db = Database::new();
 
-        db.create_table("users".to_string(), simple_schema())
-            .unwrap();
-        db.create_table("posts".to_string(), simple_schema())
-            .unwrap();
+        db.create_table("users", simple_schema()).unwrap();
+        db.create_table("posts", simple_schema()).unwrap();
 
         let mut tables = db.list_tables();
         tables.sort();
@@ -995,8 +993,7 @@ mod tests {
     #[test]
     fn test_get_table_mut() {
         let mut db = Database::new();
-        db.create_table("users".to_string(), simple_schema())
-            .unwrap();
+        db.create_table("users", simple_schema()).unwrap();
 
         {
             let table = db.get_table_mut("users").unwrap();
@@ -1281,8 +1278,7 @@ mod tests {
     #[test]
     fn test_delete_no_match() {
         let mut db = Database::new();
-        db.create_table("users".to_string(), simple_schema())
-            .unwrap();
+        db.create_table("users", simple_schema()).unwrap();
         db.execute("INSERT INTO users VALUES (1, 'Alice')").unwrap();
 
         // Try to delete a non-matching row

@@ -34,7 +34,7 @@ impl<'a> Parser<'a> {
     /// # Errors
     /// Returns an error string if the syntax is invalid or if trailing tokens
     /// remain after a valid statement.
-    pub fn parse(&mut self) -> Result<Statement, String> {
+    pub fn parse(&mut self) -> Result<Statement<'a>, String> {
         let statement = match self.current_token() {
             Token::Create => self.parse_create_table(),
             Token::Insert => self.parse_insert(),
@@ -96,10 +96,9 @@ impl<'a> Parser<'a> {
     }
 
     /// Specifically consumes an [Token::Ident] and returns its inner string.
-    fn consume_ident(&mut self) -> Result<String, String> {
-        match self.current_token() {
+    fn consume_ident(&mut self) -> Result<&'a str, String> {
+        match *self.current_token() {
             Token::Ident(string) => {
-                let string = string.to_string();
                 self.advance();
                 Ok(string)
             }
@@ -112,14 +111,14 @@ impl<'a> Parser<'a> {
 
     /// Consumes a literal token (Number, String, Bool) and converts it to a [Value].
     fn consume_value(&mut self) -> Result<Value, String> {
-        match self.current_token() {
+        match *self.current_token() {
             Token::Number(nb) => {
-                let nb_copy = *nb;
+                let nb_copy = nb;
                 self.advance();
                 Ok(Value::Int(nb_copy))
             }
             Token::FloatNumber(nb) => {
-                let nb_copy = *nb;
+                let nb_copy = nb;
                 self.advance();
                 Ok(Value::Float(nb_copy))
             }
@@ -132,7 +131,7 @@ impl<'a> Parser<'a> {
                 Ok(Value::Bool(false))
             }
             Token::String(string) => {
-                let text = Arc::from(*string);
+                let text = Arc::from(string);
                 self.advance();
                 Ok(Value::Text(text))
             }
@@ -183,7 +182,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses a full `CREATE TABLE` statement.
-    fn parse_create_table(&mut self) -> Result<Statement, String> {
+    fn parse_create_table(&mut self) -> Result<Statement<'a>, String> {
         self.consume(Token::Create)?;
         self.consume(Token::Table)?;
         let name = self.consume_ident()?;
@@ -208,7 +207,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses an `INSERT INTO` statement, handling optional column lists.
-    fn parse_insert(&mut self) -> Result<Statement, String> {
+    fn parse_insert(&mut self) -> Result<Statement<'a>, String> {
         self.consume(Token::Insert)?;
         self.consume(Token::Into)?;
         let name = self.consume_ident()?;
@@ -256,7 +255,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn handle_count(&mut self) -> Result<SelectItem, String> {
+    fn handle_count(&mut self) -> Result<SelectItem<'a>, String> {
         self.advance();
         self.consume(Token::LeftParen)?;
         match self.current_token() {
@@ -278,7 +277,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the column selection part of a `SELECT` statement (e.g., `*` or `col1, col2`).
-    fn parse_columns(&mut self) -> Result<ColumnsSelect, String> {
+    fn parse_columns(&mut self) -> Result<ColumnsSelect<'a>, String> {
         match self.current_token() {
             Token::Star => {
                 self.advance();
@@ -287,7 +286,7 @@ impl<'a> Parser<'a> {
             _ => {
                 let mut items = Vec::new();
                 loop {
-                    match self.current_token() {
+                    match *self.current_token() {
                         Token::Count => {
                             items.push(self.handle_count()?);
                         }
@@ -320,7 +319,7 @@ impl<'a> Parser<'a> {
                             items.push(SelectItem::Aggregate(Aggregate::Avg(col)));
                         }
                         Token::Ident(name) => {
-                            items.push(SelectItem::Column(name.to_string()));
+                            items.push(SelectItem::Column(name));
                             self.advance();
                         }
                         _ => return Err("Expected aggregate, * or column name".into()),
@@ -338,7 +337,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses a `SELECT` statement.
-    fn parse_select(&mut self) -> Result<Statement, String> {
+    fn parse_select(&mut self) -> Result<Statement<'a>, String> {
         self.consume(Token::Select)?;
         let columns = self.parse_columns()?;
         self.consume(Token::From)?;
@@ -405,7 +404,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses a DELETE statement.
-    fn parse_delete(&mut self) -> Result<Statement, String> {
+    fn parse_delete(&mut self) -> Result<Statement<'a>, String> {
         self.consume(Token::Delete)?;
         self.consume(Token::From)?;
         let table = self.consume_ident()?;
@@ -418,7 +417,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses an UPDATE statement.
-    fn parse_update(&mut self) -> Result<Statement, String> {
+    fn parse_update(&mut self) -> Result<Statement<'a>, String> {
         self.consume(Token::Update)?;
         let table = self.consume_ident()?;
         self.consume(Token::Set)?;
@@ -450,7 +449,7 @@ impl<'a> Parser<'a> {
     ///
     /// Entry point for expression parsing. Delegates to `parse_or_expr()`
     /// to handle operator precedence correctly.
-    fn parse_expression(&mut self) -> Result<Expr, String> {
+    fn parse_expression(&mut self) -> Result<Expr<'a>, String> {
         self.parse_or_expr()
     }
 
@@ -462,7 +461,7 @@ impl<'a> Parser<'a> {
     /// # Examples
     /// - `age > 18 OR name = 'Alice'`
     /// - `a = 1 OR b = 2 OR c = 3` → `((a=1) OR (b=2)) OR (c=3)`
-    fn parse_or_expr(&mut self) -> Result<Expr, String> {
+    fn parse_or_expr(&mut self) -> Result<Expr<'a>, String> {
         let mut expr = self.parse_and_expr()?;
         while matches!(self.current_token(), Token::Or) {
             self.advance();
@@ -483,7 +482,7 @@ impl<'a> Parser<'a> {
     /// # Examples
     /// - `age > 18 AND active = TRUE`
     /// - `a = 1 AND b = 2 AND c = 3` → `((a=1) AND (b=2)) AND (c=3)`
-    fn parse_and_expr(&mut self) -> Result<Expr, String> {
+    fn parse_and_expr(&mut self) -> Result<Expr<'a>, String> {
         let mut expr = self.parse_op_expr()?;
         while matches!(self.current_token(), Token::And) {
             self.advance();
@@ -509,7 +508,7 @@ impl<'a> Parser<'a> {
     /// - `age > 18`
     /// - `name = 'Alice'`
     /// - `active = TRUE`
-    fn parse_op_expr(&mut self) -> Result<Expr, String> {
+    fn parse_op_expr(&mut self) -> Result<Expr<'a>, String> {
         let column = self.consume_ident()?;
         let op = match self.current_token() {
             Token::Lower => ComparisonOp::Lt,
@@ -536,7 +535,7 @@ impl<'a> Parser<'a> {
     /// # Returns
     /// A vector of [OrderByClause] in the order they should be applied.
     /// The first clause has priority in sorting.
-    fn parse_order_by(&mut self) -> Result<Vec<OrderByClause>, String> {
+    fn parse_order_by(&mut self) -> Result<Vec<OrderByClause<'a>>, String> {
         let mut clauses = vec![];
 
         loop {
@@ -570,7 +569,7 @@ impl<'a> Parser<'a> {
     ///
     /// If a string is given, exec the vacuum inside this specific table, else, do it in all
     /// tables.
-    pub fn parse_vacuum(&mut self) -> Result<Statement, String> {
+    pub fn parse_vacuum(&mut self) -> Result<Statement<'a>, String> {
         self.consume(Token::Vacuum)?;
 
         if matches!(self.current_token(), Token::Semicolon | Token::Eof) {
@@ -788,9 +787,9 @@ mod tests {
         let statement = parser.parse().unwrap();
 
         let expected = Statement::Delete(Delete {
-            table: "users".to_string(),
+            table: "users",
             where_clause: Expr::Comparison {
-                column: "age".to_string(),
+                column: "age",
                 op: ComparisonOp::Gt,
                 value: Value::Int(12),
             },
@@ -809,15 +808,15 @@ mod tests {
         let statement = parser.parse().unwrap();
 
         let expected = Statement::Delete(Delete {
-            table: "users".to_string(),
+            table: "users",
             where_clause: Expr::And {
                 left: Box::new(Expr::Comparison {
-                    column: "age".to_string(),
+                    column: "age",
                     op: ComparisonOp::Gt,
                     value: Value::Int(12),
                 }),
                 right: Box::new(Expr::Comparison {
-                    column: "name".to_string(),
+                    column: "name",
                     op: ComparisonOp::Eq,
                     value: Value::Text("John".into()),
                 }),
@@ -837,13 +836,13 @@ mod tests {
         let statement = parser.parse().unwrap();
 
         let mut values = HashMap::new();
-        values.insert("name".into(), Value::Text("Bob".into()));
+        values.insert("name", Value::Text("Bob".into()));
 
         let expected = Statement::Update(Update {
-            table: "users".to_string(),
+            table: "users",
             assignments: values,
             where_clause: Expr::Comparison {
-                column: "age".to_string(),
+                column: "age",
                 op: ComparisonOp::Gt,
                 value: Value::Int(12),
             },

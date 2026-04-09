@@ -265,14 +265,14 @@ impl Table {
     pub fn update(
         &mut self,
         rows_idx: &[usize],
-        values: HashMap<String, Value>,
+        values: HashMap<&str, Value>,
     ) -> Result<(), String> {
         for (col, mut value) in values {
             if let Value::Text(ref mut s) = value {
                 self.internalize_string(s);
             }
             let column = self
-                .get_col_mut(&col)
+                .get_col_mut(col)
                 .ok_or_else(|| format!("column {:?} is not a column from this table", col))?;
             for row in rows_idx {
                 column.set(*row, &value)?;
