@@ -1410,6 +1410,38 @@ mod tests {
     }
 
     #[test]
+    fn test_update_set_null() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, name TEXT)")
+            .unwrap();
+        db.execute("INSERT INTO users VALUES (1, 'Alice')").unwrap();
+        db.execute("INSERT INTO users VALUES (2, 'Bob')").unwrap();
+
+        db.execute("UPDATE users SET name = NULL WHERE id = 1")
+            .unwrap();
+
+        let result = db
+            .query("SELECT id, name FROM users ORDER BY id ASC")
+            .unwrap();
+        assert_eq!(result.rows[0], vec![Value::Int(1), Value::Null]);
+        assert_eq!(
+            result.rows[1],
+            vec![Value::Int(2), Value::Text("Bob".into())]
+        );
+    }
+
+    #[test]
+    fn test_insert_with_null_literal() {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE users (id INT, name TEXT)")
+            .unwrap();
+        db.execute("INSERT INTO users VALUES (1, NULL)").unwrap();
+
+        let result = db.query("SELECT id, name FROM users").unwrap();
+        assert_eq!(result.rows[0], vec![Value::Int(1), Value::Null]);
+    }
+
+    #[test]
     fn test_vacuum_single_table() {
         let mut db = Database::new();
 

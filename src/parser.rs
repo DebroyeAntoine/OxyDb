@@ -135,6 +135,10 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Value::Text(text))
             }
+            Token::Null => {
+                self.advance();
+                Ok(Value::Null)
+            }
             _ => Err(format!("Expected value, found {:?}", self.current_token())),
         }
     }
@@ -849,6 +853,51 @@ mod tests {
         });
 
         assert_eq!(statement, expected);
+    }
+
+    #[test]
+    fn test_parse_update_set_null() {
+        let sql = "UPDATE users SET name = NULL WHERE age > 12";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        let mut values = HashMap::new();
+        values.insert("name", Value::Null);
+
+        let expected = Statement::Update(Update {
+            table: "users",
+            assignments: values,
+            where_clause: Expr::Comparison {
+                column: "age",
+                op: ComparisonOp::Gt,
+                value: Value::Int(12),
+            },
+        });
+
+        assert_eq!(statement, expected);
+    }
+
+    #[test]
+    fn test_parse_insert_with_null_literal() {
+        let sql = "INSERT INTO users VALUES (1, NULL)";
+        let mut tokenizer = Tokenizer::new(sql);
+        let tokens = tokenizer.tokenize().unwrap();
+
+        let mut parser = Parser::new(tokens);
+        let statement = parser.parse().unwrap();
+
+        match statement {
+            Statement::InsertInto(ins) => {
+                assert_eq!(ins.table, "users");
+                assert_eq!(ins.values.len(), 2);
+                assert_eq!(ins.values[0], Value::Int(1));
+                assert_eq!(ins.values[1], Value::Null);
+            }
+            _ => panic!("Expected InsertInto"),
+        }
     }
 
     #[test]

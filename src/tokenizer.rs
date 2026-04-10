@@ -52,6 +52,8 @@ pub enum Token<'a> {
     True,
     /// The boolean literal `FALSE`.
     False,
+    /// The `NULL` literal.
+    Null,
 
     // --- Symbols ---
     /// Left parenthesis `(`
@@ -221,6 +223,7 @@ impl<'a> Tokenizer<'a> {
             "BOOL" => Ok(Token::Bool),
             "TRUE" => Ok(Token::True),
             "FALSE" => Ok(Token::False),
+            "NULL" => Ok(Token::Null),
             "AND" => Ok(Token::And),
             "OR" => Ok(Token::Or),
             "LIMIT" => Ok(Token::Limit),
