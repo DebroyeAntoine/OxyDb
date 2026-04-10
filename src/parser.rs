@@ -111,14 +111,14 @@ impl<'a> Parser<'a> {
 
     /// Consumes a literal token (Number, String, Bool) and converts it to a [Value].
     fn consume_value(&mut self) -> Result<Value, String> {
-        match *self.current_token() {
+        match self.current_token() {
             Token::Number(nb) => {
-                let nb_copy = nb;
+                let nb_copy = *nb;
                 self.advance();
                 Ok(Value::Int(nb_copy))
             }
             Token::FloatNumber(nb) => {
-                let nb_copy = nb;
+                let nb_copy = *nb;
                 self.advance();
                 Ok(Value::Float(nb_copy))
             }
@@ -131,7 +131,7 @@ impl<'a> Parser<'a> {
                 Ok(Value::Bool(false))
             }
             Token::String(string) => {
-                let text = Arc::from(string);
+                let text: Arc<str> = Arc::from(string.as_ref());
                 self.advance();
                 Ok(Value::Text(text))
             }

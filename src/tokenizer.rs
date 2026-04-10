@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 /// Represents the smallest meaningful units (atoms) of the SQL language.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token<'a> {
@@ -42,7 +44,8 @@ pub enum Token<'a> {
     /// A 64-bit integer literal (e.g., `42`).
     Number(i64),
     /// A string literal, defined between single quotes (e.g., `'Alice'`).
-    String(&'a str),
+    /// Double single quotes are used to escape: `'it''s'` → `it's`.
+    String(Cow<'a, str>),
     /// A 64-bit floating-point literal (e.g., `3.14`).
     FloatNumber(f64),
     /// The boolean literal `TRUE`.
@@ -272,28 +275,43 @@ impl<'a> Tokenizer<'a> {
     }
 
     /// Reads a string literal enclosed in single quotes.
+    /// Supports escaping via doubled single quotes: `'it''s'` → `it's`.
     fn read_string(&mut self) -> Result<Token<'a>, String> {
         self.advance(); // Skip the opening quote
 
-        if !self.is_at_end() && self.current_char() == '\'' {
-            self.advance(); // Consume empty string closing quote
-            return Ok(Token::String(""));
-        }
-
         let start = self.position;
-        while !self.is_at_end() && self.current_char() != '\'' {
-            self.advance();
-        }
+        let mut has_escape = false;
 
-        if self.is_at_end() {
-            return Err("Unterminated string".into());
+        loop {
+            if self.is_at_end() {
+                return Err("Unterminated string".into());
+            }
+
+            if self.current_char() == '\'' {
+                // Peek ahead: if next char is also `'`, it's an escape
+                if self.position + 1 < self.input.len()
+                    && self.input.as_bytes()[self.position + 1] == b'\''
+                {
+                    has_escape = true;
+                    self.advance(); // skip first quote
+                    self.advance(); // skip second quote
+                } else {
+                    break; // closing quote
+                }
+            } else {
+                self.advance();
+            }
         }
 
         let end = self.position;
-        // Skip the closing quote
-        self.advance();
+        self.advance(); // skip the closing quote
 
-        Ok(Token::String(&self.input[start..end]))
+        if has_escape {
+            let raw = &self.input[start..end];
+            Ok(Token::String(Cow::Owned(raw.replace("''", "'"))))
+        } else {
+            Ok(Token::String(Cow::Borrowed(&self.input[start..end])))
+        }
     }
 }
 
@@ -400,9 +418,9 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::String("Alice"),
+                Token::String(Cow::Borrowed("Alice")),
                 Token::Comma,
-                Token::String("Bob Dylan"),
+                Token::String(Cow::Borrowed("Bob Dylan")),
                 Token::Eof,
             ]
         );
@@ -412,7 +430,7 @@ mod tests {
     fn test_tokenize_empty_string() {
         let mut tokenizer = Tokenizer::new("''");
         let tokens = tokenizer.tokenize().unwrap();
-        assert_eq!(tokens, vec![Token::String(""), Token::Eof]);
+        assert_eq!(tokens, vec![Token::String(Cow::Borrowed("")), Token::Eof]);
     }
 
     #[test]
@@ -443,12 +461,46 @@ mod tests {
         let tokens = tokenizer.tokenize().unwrap();
 
         // The &str inside String points into the original sql (without quotes)
-        if let Token::String(s) = tokens[0] {
-            assert_eq!(s, "hello");
+        if let Token::String(ref s) = tokens[0] {
+            assert_eq!(s.as_ref(), "hello");
+            assert!(matches!(s, Cow::Borrowed(_)));
             assert!(std::ptr::eq(s.as_bytes(), sql[1..6].as_bytes()));
         } else {
             panic!("Expected String token");
         }
+    }
+
+    #[test]
+    fn test_escaped_single_quote() {
+        let mut tokenizer = Tokenizer::new("'it''s'");
+        let tokens = tokenizer.tokenize().unwrap();
+        assert_eq!(
+            tokens,
+            vec![Token::String(Cow::Owned("it's".to_string())), Token::Eof]
+        );
+    }
+
+    #[test]
+    fn test_multiple_escaped_quotes() {
+        let mut tokenizer = Tokenizer::new("'he said ''hello'' to me'");
+        let tokens = tokenizer.tokenize().unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::String(Cow::Owned("he said 'hello' to me".to_string())),
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_only_escaped_quote() {
+        let mut tokenizer = Tokenizer::new("''''");
+        let tokens = tokenizer.tokenize().unwrap();
+        assert_eq!(
+            tokens,
+            vec![Token::String(Cow::Owned("'".to_string())), Token::Eof]
+        );
     }
 
     #[test]
