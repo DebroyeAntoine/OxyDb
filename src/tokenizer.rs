@@ -38,6 +38,11 @@ pub enum Token<'a> {
     Max,
     Group,
 
+    // Transactions
+    Begin,
+    Commit,
+    Rollback,
+
     // --- Identifiers & Literals ---
     /// A name representing a table or a column (e.g., `users`, `id`).
     Ident(&'a str),
@@ -240,6 +245,9 @@ impl<'a> Tokenizer<'a> {
             "MAX" => Ok(Token::Max),
             "GROUP" => Ok(Token::Group),
             "AUTO_INCREMENT" => Ok(Token::AutoIncrement),
+            "BEGIN" => Ok(Token::Begin),
+            "COMMIT" => Ok(Token::Commit),
+            "ROLLBACK" => Ok(Token::Rollback),
             _ => Ok(Token::Ident(ident)),
         }
     }

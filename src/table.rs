@@ -63,7 +63,7 @@ impl Schema {
 ///
 /// Data is stored in a columnar format (one [Column] per schema field) to improve
 /// memory locality and performance for analytical queries.
-#[derive(Debug, Allocative)]
+#[derive(Debug, Allocative, Clone)]
 pub struct Table {
     /// The unique name of the table.
     pub name: String,

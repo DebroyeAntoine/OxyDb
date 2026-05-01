@@ -25,6 +25,11 @@ pub struct Database {
     tables: HashMap<String, Table>,
     /// Configuration for automatic data compaction.
     pub vacuum_config: VacuumConfig,
+
+    /// Snapshot of all tables taken at `BEGIN`. `None` means no active transaction.
+    /// Restored on `ROLLBACK`; discarded on `COMMIT`. Auto-vacuum is suppressed while
+    /// a snapshot is held to avoid compacting data that may need to be rolled back.
+    transaction_snapshot: Option<HashMap<String, Table>>,
 }
 
 /// Represents the result of a successful `SELECT` query.
@@ -100,6 +105,7 @@ impl<'a> Database {
         Self {
             tables: HashMap::default(),
             vacuum_config: VacuumConfig::default(),
+            transaction_snapshot: None,
         }
     }
 
@@ -184,6 +190,15 @@ impl<'a> Database {
             }
             Statement::Vacuum(table) => {
                 self.vacuum(table)?;
+            }
+            Statement::Begin => {
+                self.begin_transaction()?;
+            }
+            Statement::Commit => {
+                self.commit_transaction()?;
+            }
+            Statement::Rollback => {
+                self.rollback_transaction()?;
             }
             _ => {
                 return Err(format!(
@@ -919,6 +934,10 @@ impl<'a> Database {
 
     /// Internal helper to check if a table needs vacuuming and execute it.
     fn maybe_auto_vacuum(&mut self, table_name: &str) -> Result<(), String> {
+        // don't vacuum during snapshot to be consistent in case of rollback
+        if self.transaction_snapshot.is_some() {
+            return Ok(());
+        }
         let needs_vacuum = self
             .tables
             .get(table_name)
@@ -929,6 +948,55 @@ impl<'a> Database {
             self.vacuum(Some(table_name))?;
         }
         Ok(())
+    }
+
+    /// Starts an explicit transaction by cloning the entire table map as a rollback point.
+    ///
+    /// The clone is a full deep copy, so memory usage doubles for the snapshot duration.
+    /// Nested transactions are not supported: calling `BEGIN` while one is already active
+    /// returns an error instead of creating a savepoint.
+    ///
+    /// # Errors
+    /// Returns an error if a transaction is already in progress.
+    fn begin_transaction(&mut self) -> Result<(), String> {
+        if self.transaction_snapshot.is_some() {
+            return Err("Transaction already in progress".to_string());
+        }
+        self.transaction_snapshot = Some(self.tables.clone());
+        Ok(())
+    }
+
+    /// Makes the current transaction permanent by dropping the rollback snapshot.
+    ///
+    /// After `COMMIT`, all mutations since `BEGIN` are durably part of the live state.
+    /// The snapshot is simply discarded — no additional work is needed because writes
+    /// were applied directly to `self.tables` throughout the transaction.
+    ///
+    /// # Errors
+    /// Returns an error if no transaction is in progress.
+    fn commit_transaction(&mut self) -> Result<(), String> {
+        self.transaction_snapshot
+            .take()
+            .ok_or_else(|| "No transaction in progress".to_string())?;
+        Ok(())
+    }
+
+    /// Cancels the current transaction by replacing the live table map with the snapshot
+    /// taken at `BEGIN`, atomically undoing every mutation since then.
+    ///
+    /// Uses `Option::take` to move the snapshot out of `self.transaction_snapshot` in one
+    /// step, leaving it `None` (transaction closed) before the swap completes.
+    ///
+    /// # Errors
+    /// Returns an error if no transaction is in progress.
+    fn rollback_transaction(&mut self) -> Result<(), String> {
+        match self.transaction_snapshot.take() {
+            Some(snapshot) => {
+                self.tables = snapshot;
+                Ok(())
+            }
+            None => Err("No transaction in progress".to_string()),
+        }
     }
 }
 
@@ -1860,5 +1928,98 @@ mod tests {
     fn test_aggregate_without_group_by_column_is_error() {
         let db = setup_departments();
         assert!(db.query("SELECT dept, COUNT(*) FROM emp").is_err());
+    }
+
+    // --- Transactions ---
+
+    fn setup_tx_db() -> Database {
+        let mut db = Database::new();
+        db.execute("CREATE TABLE t (id INT, val INT)").unwrap();
+        db.execute("INSERT INTO t VALUES (1, 10)").unwrap();
+        db
+    }
+
+    #[test]
+    fn test_commit_preserves_changes() {
+        let mut db = setup_tx_db();
+        db.execute("BEGIN").unwrap();
+        db.execute("INSERT INTO t VALUES (2, 20)").unwrap();
+        db.execute("COMMIT").unwrap();
+
+        let result = db.query("SELECT * FROM t").unwrap();
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_rollback_undoes_insert() {
+        let mut db = setup_tx_db();
+        db.execute("BEGIN").unwrap();
+        db.execute("INSERT INTO t VALUES (2, 20)").unwrap();
+        db.execute("ROLLBACK").unwrap();
+
+        let result = db.query("SELECT * FROM t").unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0], vec![Value::Int(1), Value::Int(10)]);
+    }
+
+    #[test]
+    fn test_rollback_undoes_update() {
+        let mut db = setup_tx_db();
+        db.execute("BEGIN").unwrap();
+        db.execute("UPDATE t SET val = 99 WHERE id = 1").unwrap();
+        db.execute("ROLLBACK").unwrap();
+
+        let result = db.query("SELECT * FROM t").unwrap();
+        assert_eq!(result.rows[0], vec![Value::Int(1), Value::Int(10)]);
+    }
+
+    #[test]
+    fn test_rollback_undoes_delete() {
+        let mut db = setup_tx_db();
+        db.execute("BEGIN").unwrap();
+        db.execute("DELETE FROM t WHERE id = 1").unwrap();
+        db.execute("ROLLBACK").unwrap();
+
+        let result = db.query("SELECT * FROM t").unwrap();
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn test_begin_nested_is_error() {
+        let mut db = setup_tx_db();
+        db.execute("BEGIN").unwrap();
+        assert!(db.execute("BEGIN").is_err());
+        // original transaction still usable after the failed nested BEGIN
+        db.execute("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn test_commit_without_begin_is_error() {
+        let mut db = setup_tx_db();
+        assert!(db.execute("COMMIT").is_err());
+    }
+
+    #[test]
+    fn test_rollback_without_begin_is_error() {
+        let mut db = setup_tx_db();
+        assert!(db.execute("ROLLBACK").is_err());
+    }
+
+    #[test]
+    fn test_transaction_closed_after_commit() {
+        let mut db = setup_tx_db();
+        db.execute("BEGIN").unwrap();
+        db.execute("COMMIT").unwrap();
+        // second COMMIT must fail — transaction is no longer active
+        assert!(db.execute("COMMIT").is_err());
+    }
+
+    #[test]
+    fn test_transaction_closed_after_rollback() {
+        let mut db = setup_tx_db();
+        db.execute("BEGIN").unwrap();
+        db.execute("ROLLBACK").unwrap();
+        // second ROLLBACK must fail — transaction is no longer active
+        assert!(db.execute("ROLLBACK").is_err());
     }
 }

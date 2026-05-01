@@ -42,6 +42,18 @@ impl<'a> Parser<'a> {
             Token::Delete => self.parse_delete(),
             Token::Update => self.parse_update(),
             Token::Vacuum => self.parse_vacuum(),
+            Token::Begin => {
+                self.advance();
+                Ok(Statement::Begin)
+            }
+            Token::Commit => {
+                self.advance();
+                Ok(Statement::Commit)
+            }
+            Token::Rollback => {
+                self.advance();
+                Ok(Statement::Rollback)
+            }
             _ => Err(format!("Unexpected token: {:?}", self.current_token())),
         }?;
 

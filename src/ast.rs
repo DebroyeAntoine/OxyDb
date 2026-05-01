@@ -22,6 +22,12 @@ pub enum Statement<'a> {
     /// If no table is given, it will vacuum all tables.
     #[allocative(skip)]
     Vacuum(Option<&'a str>),
+    ///Start of an explicit transaction
+    Begin,
+    ///Validate the current transaction
+    Commit,
+    /// Cancel the current transaction and restore the old state
+    Rollback,
 }
 
 /// Data structure representing a `CREATE TABLE` SQL statement.
